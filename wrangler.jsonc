@@ -1,6 +1,6 @@
 {
   "name": "cloudvault",
-  "account_id": "0900cf790220d543f4a1b7b8a0e13a0f",
+  "account_id": "1e1608c0c2881e609398b115463574d1",
   "main": "src/index.ts",
   "compatibility_date": "2026-02-18",
   "compatibility_flags": ["nodejs_compat"],
@@ -13,13 +13,13 @@
   "r2_buckets": [
     {
       "binding": "VAULT_BUCKET",
-      "bucket_name": "cloudvault-files"
+      "bucket_name": "file"
     }
   ],
   "kv_namespaces": [
     {
       "binding": "VAULT_KV",
-      "id": "dcbf16f1846c4aa19a53106ef6f6f1ed"
+      "id": "a128479cc4d74272b07b957db2ed68c2"
     }
   ],
   "observability": {
