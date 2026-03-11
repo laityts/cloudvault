@@ -23,7 +23,7 @@
   }
 
   if (!fileData.name) {
-    showError('This share link may have expired or been revoked.');
+    showError('此分享链接可能已过期或已被撤销。');
     return;
   }
 
@@ -50,12 +50,12 @@
           window.location.reload();
         } else {
           var err = document.getElementById('password-error');
-          err.textContent = 'Incorrect password';
+          err.textContent = '密码错误';
           err.classList.remove('hidden');
         }
       } catch {
         var err = document.getElementById('password-error');
-        err.textContent = 'Connection error';
+        err.textContent = '连接错误';
         err.classList.remove('hidden');
       }
     });
@@ -71,7 +71,7 @@
     document.getElementById('file-name').textContent = file.name;
     document.getElementById('file-size').textContent = formatBytes(file.size);
     document.getElementById('file-date').textContent = formatDate(file.uploadedAt);
-    document.getElementById('file-downloads').textContent = (file.downloads || 0) + ' downloads';
+    document.getElementById('file-downloads').textContent = (file.downloads || 0) + ' 次下载';
     document.getElementById('file-icon').textContent = getFileIcon(file.type, file.name);
     var brandName = 'CloudVault';
     try { brandName = JSON.parse(document.getElementById('branding-data')?.textContent || '{}').siteName || brandName; } catch {}
@@ -90,7 +90,7 @@
     document.getElementById('folder-view').classList.remove('hidden');
     var brandName = 'CloudVault';
     try { brandName = JSON.parse(document.getElementById('branding-data')?.textContent || '{}').siteName || brandName; } catch {}
-    document.title = (data.folderName || 'Shared Folder') + ' — ' + brandName;
+    document.title = (data.folderName || '分享的文件夹') + ' — ' + brandName;
 
     var token = window.location.pathname.split('/').pop();
     var titleEl = document.getElementById('folder-title');
@@ -231,7 +231,7 @@
     container.style.flexDirection = 'column';
     container.innerHTML =
       '<div style="font-size:64px;margin-bottom:16px">' + getFileIcon(file.type, file.name) + '</div>' +
-      '<p style="color:#6b7280;font-size:14px">Preview not available for this file type</p>';
+      '<p style="color:#6b7280;font-size:14px">该文件类型不支持预览</p>';
   }
 
   function isCodeFile(name) {
@@ -266,7 +266,7 @@
   function formatDate(iso) {
     if (!iso) return '';
     var d = new Date(iso);
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', year: 'numeric' });
   }
 
   function getFileIcon(type, name) {

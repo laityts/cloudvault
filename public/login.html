@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="zh-CN" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CloudVault — Login</title>
-  <script>try{var _b=JSON.parse(document.getElementById('branding-data')?.textContent||'{}');if(_b.siteName)document.title=_b.siteName+' — Login'}catch{}</script>
+  <title>CloudVault — 登录</title>
+  <script>try{var _b=JSON.parse(document.getElementById('branding-data')?.textContent||'{}');if(_b.siteName)document.title=_b.siteName+' — 登录'}catch{}</script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -35,19 +35,19 @@
         </svg>
       </div>
       <h1 id="brand-name" class="text-2xl font-bold text-white">CloudVault</h1>
-      <p class="text-gray-500 text-sm mt-1">Personal Cloud Storage</p>
+      <p class="text-gray-500 text-sm mt-1">个人云存储</p>
     </div>
 
     <form id="login-form" class="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-2xl">
       <div id="error-box" class="hidden mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm text-center"></div>
 
       <div class="mb-5">
-        <label for="password" class="block text-sm font-medium text-gray-400 mb-2">Password</label>
+        <label for="password" class="block text-sm font-medium text-gray-400 mb-2">密码</label>
         <input
           type="password"
           id="password"
           name="password"
-          placeholder="Enter your password"
+          placeholder="请输入密码"
           required
           autofocus
           class="w-full px-4 py-3 rounded-xl bg-gray-800 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent transition-all"
@@ -59,12 +59,12 @@
         id="submit-btn"
         class="w-full py-3 px-4 rounded-xl bg-accent-600 hover:bg-accent-500 text-white font-medium transition-all focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
       >
-        <span id="btn-text">Sign In</span>
+        <span id="btn-text">登录</span>
         <svg id="btn-spinner" class="hidden spinner w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
       </button>
     </form>
 
-    <p class="text-center text-gray-600 text-xs mt-6">Powered by <a href="https://github.com/zqs1qiwan/cloudvault" target="_blank" rel="noopener" class="hover:text-gray-400 underline">zqs1qiwan/CloudVault</a></p>
+    <p class="text-center text-gray-600 text-xs mt-6">由 <a href="https://github.com/zqs1qiwan/cloudvault" target="_blank" rel="noopener" class="hover:text-gray-400 underline">zqs1qiwan/CloudVault</a> 强力驱动</p>
   </div>
 
   <script>
@@ -76,7 +76,7 @@
           var iconEl = document.getElementById('brand-icon');
           iconEl.innerHTML = '<img src="' + b.siteIconUrl + '" class="w-12 h-12 object-contain">';
         }
-        // Note: Do NOT overwrite the "Powered by" attribution footer
+        // 注意：不要覆盖底部的 "Powered by" 署名
       } catch {}
     })();
 
@@ -90,7 +90,7 @@
       e.preventDefault();
       errorBox.classList.add('hidden');
       submitBtn.disabled = true;
-      btnText.textContent = 'Signing in...';
+      btnText.textContent = '登录中...';
       btnSpinner.classList.remove('hidden');
 
       try {
@@ -112,17 +112,17 @@
           return;
         }
 
-        const data = await res.json().catch(() => ({ error: 'Invalid password' }));
-        errorBox.textContent = data.error || 'Invalid password';
+        const data = await res.json().catch(() => ({ error: '密码错误' }));
+        errorBox.textContent = data.error || '密码错误';
         errorBox.classList.remove('hidden');
         form.classList.add('shake');
         setTimeout(() => form.classList.remove('shake'), 500);
       } catch {
-        errorBox.textContent = 'Connection error. Please try again.';
+        errorBox.textContent = '连接错误，请重试。';
         errorBox.classList.remove('hidden');
       } finally {
         submitBtn.disabled = false;
-        btnText.textContent = 'Sign In';
+        btnText.textContent = '登录';
         btnSpinner.classList.add('hidden');
       }
     });

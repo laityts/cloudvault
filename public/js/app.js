@@ -79,14 +79,14 @@ function cloudvault() {
         this.uploads = [...window.UploadManager.queue.map(q => ({
           name: q.file.name, progress: q.progress, status: q.status
         }))];
-        this.showToast(e.detail.name + ' uploaded', 'success');
+        this.showToast(e.detail.name + ' 上传成功', 'success');
         await Promise.all([this.fetchFiles(), this.fetchStats(), this.fetchFolders()]);
       });
       window.addEventListener('upload-error', (e) => {
         this.uploads = [...window.UploadManager.queue.map(q => ({
           name: q.file.name, progress: q.progress, status: q.status
         }))];
-        this.showToast('Failed to upload ' + e.detail.name, 'error');
+        this.showToast('上传 ' + e.detail.name + ' 失败', 'error');
       });
     },
 
@@ -167,11 +167,11 @@ function cloudvault() {
         const indent = depth * 16;
         let sharedBadge = '';
         if (node.excluded) {
-          sharedBadge = '<span class="folder-share-badge excluded" title="Excluded from share">\u2298</span>';
+          sharedBadge = '<span class="folder-share-badge excluded" title="从分享中排除">\u2298</span>';
         } else if (node.directlyShared) {
-          sharedBadge = '<span class="folder-share-badge guest" title="Guest shared">\uD83D\uDC41</span>';
+          sharedBadge = '<span class="folder-share-badge guest" title="访客分享">\uD83D\uDC41</span>';
         } else if (node.shared) {
-          sharedBadge = '<span class="folder-share-badge inherited" title="Inherited share">\u25CB</span>';
+          sharedBadge = '<span class="folder-share-badge inherited" title="继承分享">\u25CB</span>';
         }
         html += '<div class="sidebar-item tree-item' + (isActive ? ' active' : '') + '" ' +
           'style="padding-left:' + (12 + indent) + 'px" ' +
@@ -239,9 +239,9 @@ function cloudvault() {
           });
           this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
           this._expandVer++;
-          this.showToast(nowShared ? 'Folder shared' : 'Folder unshared', 'success');
-        } else { this.showToast('Failed to toggle folder sharing', 'error'); }
-      } catch { this.showToast('Failed to toggle folder sharing', 'error'); }
+          this.showToast(nowShared ? '文件夹已分享' : '文件夹取消分享', 'success');
+        } else { this.showToast('切换文件夹分享失败', 'error'); }
+      } catch { this.showToast('切换文件夹分享失败', 'error'); }
     },
 
     async toggleFolderExclude(folder) {
@@ -273,9 +273,9 @@ function cloudvault() {
           });
           this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
           this._expandVer++;
-          this.showToast(nowExcluded ? 'Folder excluded from share' : 'Folder included in share', 'success');
-        } else { this.showToast('Failed to toggle folder exclusion', 'error'); }
-      } catch { this.showToast('Failed to toggle folder exclusion', 'error'); }
+          this.showToast(nowExcluded ? '文件夹已从分享中排除' : '文件夹已包含在分享中', 'success');
+        } else { this.showToast('切换文件夹排除状态失败', 'error'); }
+      } catch { this.showToast('切换文件夹排除状态失败', 'error'); }
     },
 
     showRenameFolderModal(folder) {
@@ -313,10 +313,10 @@ function cloudvault() {
           });
           this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
           this._expandVer++;
-          this.showToast('Folder renamed', 'success');
+          this.showToast('文件夹重命名成功', 'success');
           await this.fetchFiles();
-        } else { this.showToast('Rename failed', 'error'); }
-      } catch { this.showToast('Rename failed', 'error'); }
+        } else { this.showToast('重命名失败', 'error'); }
+      } catch { this.showToast('重命名失败', 'error'); }
     },
 
     showDeleteFolderModal(folder) {
@@ -344,13 +344,13 @@ function cloudvault() {
           this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
           this._expandVer++;
           var parts = [];
-          if (data.deletedFiles > 0) parts.push(data.deletedFiles + ' file' + (data.deletedFiles > 1 ? 's' : ''));
-          if (data.deletedSubfolders > 0) parts.push(data.deletedSubfolders + ' subfolder' + (data.deletedSubfolders > 1 ? 's' : ''));
-          var msg = 'Folder deleted' + (parts.length ? ' — removed ' + parts.join(' and ') : '');
+          if (data.deletedFiles > 0) parts.push(data.deletedFiles + ' 个文件' + (data.deletedFiles > 1 ? '' : ''));
+          if (data.deletedSubfolders > 0) parts.push(data.deletedSubfolders + ' 个子文件夹' + (data.deletedSubfolders > 1 ? '' : ''));
+          var msg = '文件夹已删除' + (parts.length ? ' — 已移除 ' + parts.join(' 和 ') : '');
           this.showToast(msg, 'success');
           await this.fetchFiles();
-        } else { this.showToast('Delete failed', 'error'); }
-      } catch { this.showToast('Delete failed', 'error'); }
+        } else { this.showToast('删除失败', 'error'); }
+      } catch { this.showToast('删除失败', 'error'); }
     },
 
     showMoveModal(file) {
@@ -373,10 +373,10 @@ function cloudvault() {
         });
         if (res && res.ok) {
           const data = await res.json();
-          this.showToast(data.moved + ' file(s) moved', 'success');
+          this.showToast(data.moved + ' 个文件已移动', 'success');
           await Promise.all([this.fetchFiles(), this.fetchFolders()]);
-        } else { this.showToast('Move failed', 'error'); }
-      } catch { this.showToast('Move failed', 'error'); }
+        } else { this.showToast('移动失败', 'error'); }
+      } catch { this.showToast('移动失败', 'error'); }
     },
 
     async apiFetch(url, opts = {}) {
@@ -439,7 +439,6 @@ function cloudvault() {
       this.clearSelection();
       this.sidebarOpen = false;
       if (folder !== 'root') {
-        // Always expand the target folder and all parents on navigation
         const parts = folder.split('/');
         let path = '';
         for (let i = 0; i < parts.length; i++) {
@@ -506,12 +505,12 @@ function cloudvault() {
         if (res && res.ok) {
           this.files = this.files.filter(f => !ids.includes(f.id));
           this.clearSelection();
-          this.showToast(ids.length + ' file(s) deleted', 'success');
+          this.showToast(ids.length + ' 个文件已删除', 'success');
           this.fetchStats();
         } else {
-          this.showToast('Failed to delete files', 'error');
+          this.showToast('删除文件失败', 'error');
         }
-      } catch { this.showToast('Failed to delete files', 'error'); }
+      } catch { this.showToast('删除文件失败', 'error'); }
     },
 
     showRenameModal(file) {
@@ -531,9 +530,9 @@ function cloudvault() {
         });
         if (res && res.ok) {
           file.name = newName.trim();
-          this.showToast('File renamed', 'success');
-        } else { this.showToast('Rename failed', 'error'); }
-      } catch { this.showToast('Rename failed', 'error'); }
+          this.showToast('文件重命名成功', 'success');
+        } else { this.showToast('重命名失败', 'error'); }
+      } catch { this.showToast('重命名失败', 'error'); }
     },
 
     async createFolder() {
@@ -564,9 +563,9 @@ function cloudvault() {
             }
           }
           this._expandVer++;
-          this.showToast('Folder created', 'success');
-        } else { this.showToast('Failed to create folder', 'error'); }
-      } catch { this.showToast('Failed to create folder', 'error'); }
+          this.showToast('文件夹创建成功', 'success');
+        } else { this.showToast('创建文件夹失败', 'error'); }
+      } catch { this.showToast('创建文件夹失败', 'error'); }
     },
 
     shareFile(file) {
@@ -589,10 +588,10 @@ function cloudvault() {
           const data = await res.json();
           file.shareToken = data.token;
           this.shareModal.file = file;
-          this.showToast('Share link created', 'success');
+          this.showToast('分享链接已创建', 'success');
           this.copyShareLink(data.token);
-        } else { this.showToast('Failed to create share link', 'error'); }
-      } catch { this.showToast('Failed to create share link', 'error'); }
+        } else { this.showToast('创建分享链接失败', 'error'); }
+      } catch { this.showToast('创建分享链接失败', 'error'); }
     },
 
     async revokeShare(fileId) {
@@ -602,9 +601,9 @@ function cloudvault() {
           const file = this.files.find(f => f.id === fileId);
           if (file) file.shareToken = null;
           this.shareModal.show = false;
-          this.showToast('Share link revoked', 'success');
-        } else { this.showToast('Failed to revoke link', 'error'); }
-      } catch { this.showToast('Failed to revoke link', 'error'); }
+          this.showToast('分享链接已撤销', 'success');
+        } else { this.showToast('撤销链接失败', 'error'); }
+      } catch { this.showToast('撤销链接失败', 'error'); }
     },
 
     async shareFolderLink(folder) {
@@ -640,10 +639,10 @@ function cloudvault() {
           this.folderShareLinkModal.token = data.token;
           this.folderShareLinkModal.hasPassword = data.hasPassword;
           this.folderShareLinkModal.expiresAt = data.expiresAt;
-          this.showToast('Folder share link created', 'success');
+          this.showToast('文件夹分享链接已创建', 'success');
           this.copyShareLink(data.token);
-        } else { this.showToast('Failed to create folder share link', 'error'); }
-      } catch { this.showToast('Failed to create folder share link', 'error'); }
+        } else { this.showToast('创建文件夹分享链接失败', 'error'); }
+      } catch { this.showToast('创建文件夹分享链接失败', 'error'); }
     },
 
     async revokeFolderShareLink(folder) {
@@ -651,14 +650,14 @@ function cloudvault() {
         var res = await this.apiFetch('/api/folder-share-link/' + encodeURIComponent(folder), { method: 'DELETE' });
         if (res && res.ok) {
           this.folderShareLinkModal.show = false;
-          this.showToast('Folder share link revoked', 'success');
-        } else { this.showToast('Failed to revoke folder share link', 'error'); }
-      } catch { this.showToast('Failed to revoke folder share link', 'error'); }
+          this.showToast('文件夹分享链接已撤销', 'success');
+        } else { this.showToast('撤销文件夹分享链接失败', 'error'); }
+      } catch { this.showToast('撤销文件夹分享链接失败', 'error'); }
     },
 
     copyShareLink(token) {
       const url = window.location.origin + '/s/' + token;
-      navigator.clipboard.writeText(url).then(() => this.showToast('Link copied to clipboard', 'info'));
+      navigator.clipboard.writeText(url).then(() => this.showToast('链接已复制到剪贴板', 'info'));
     },
 
     downloadFile(file) {
@@ -681,7 +680,7 @@ function cloudvault() {
 
       try {
         if (file.type.startsWith('video/')) {
-          this.previewModal.content = '<video controls autoplay class="preview-media"><source src="' + previewUrl + '" type="' + this._escAttr(file.type) + '">Your browser does not support video.</video>';
+          this.previewModal.content = '<video controls autoplay class="preview-media"><source src="' + previewUrl + '" type="' + this._escAttr(file.type) + '">您的浏览器不支持视频播放。</video>';
           this.previewModal.loading = false;
         } else if (file.type.startsWith('audio/')) {
           this.previewModal.content = '<div class="preview-audio-wrap"><span class="text-6xl mb-4">\uD83C\uDFB5</span><audio controls autoplay class="w-full"><source src="' + previewUrl + '" type="' + this._escAttr(file.type) + '"></audio></div>';
@@ -709,11 +708,11 @@ function cloudvault() {
           }
           this.previewModal.loading = false;
         } else {
-          this.previewModal.content = '<div class="preview-unsupported"><span class="text-5xl mb-3">' + this.getFileIcon(file.type, file.name) + '</span><p class="text-sm" style="color:var(--text-secondary)">Preview not available for this file type</p></div>';
+          this.previewModal.content = '<div class="preview-unsupported"><span class="text-5xl mb-3">' + this.getFileIcon(file.type, file.name) + '</span><p class="text-sm" style="color:var(--text-secondary)">该文件类型不支持预览</p></div>';
           this.previewModal.loading = false;
         }
       } catch (e) {
-        this.previewModal.content = '<div class="preview-unsupported"><p class="text-sm" style="color:var(--danger)">Failed to load preview</p></div>';
+        this.previewModal.content = '<div class="preview-unsupported"><p class="text-sm" style="color:var(--danger)">加载预览失败</p></div>';
         this.previewModal.loading = false;
       }
     },
@@ -743,7 +742,7 @@ function cloudvault() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ids }),
         });
-        if (!res || !res.ok) { this.showToast('Failed to download zip', 'error'); return; }
+        if (!res || !res.ok) { this.showToast('下载压缩包失败', 'error'); return; }
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -753,8 +752,8 @@ function cloudvault() {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        this.showToast('Zip downloaded', 'success');
-      } catch { this.showToast('Failed to download zip', 'error'); }
+        this.showToast('压缩包下载成功', 'success');
+      } catch { this.showToast('下载压缩包失败', 'error'); }
     },
 
     openContextMenu(event, file) {
@@ -839,9 +838,9 @@ function cloudvault() {
           if (this._branding.siteIconUrl) { if (!fi) { fi = document.createElement('link'); fi.rel = 'icon'; document.head.appendChild(fi); } fi.href = this._branding.siteIconUrl; }
           else if (fi) { fi.remove(); }
           this.settingsModal.show = false;
-          this.showToast('Settings saved', 'success');
-        } else { this.showToast('Failed to save settings', 'error'); }
-      } catch { this.showToast('Failed to save settings', 'error'); }
+          this.showToast('设置已保存', 'success');
+        } else { this.showToast('保存设置失败', 'error'); }
+      } catch { this.showToast('保存设置失败', 'error'); }
     },
 
     async logout() {
@@ -905,13 +904,13 @@ function cloudvault() {
       const now = new Date();
       const diff = now - date;
       const mins = Math.floor(diff / 60000);
-      if (mins < 1) return 'Just now';
-      if (mins < 60) return mins + 'm ago';
+      if (mins < 1) return '刚刚';
+      if (mins < 60) return mins + ' 分钟前';
       const hours = Math.floor(mins / 60);
-      if (hours < 24) return hours + 'h ago';
+      if (hours < 24) return hours + ' 小时前';
       const days = Math.floor(hours / 24);
-      if (days < 7) return days + 'd ago';
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+      if (days < 7) return days + ' 天前';
+      return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
     },
 
     getFileCategory(type, name) {
