@@ -13,7 +13,7 @@
   "r2_buckets": [
     {
       "binding": "VAULT_BUCKET",
-      "bucket_name": "file"
+      "bucket_name": "cloudvault-files"
     }
   ],
   "kv_namespaces": [
