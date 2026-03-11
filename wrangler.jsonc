@@ -27,6 +27,7 @@
     "head_sampling_rate": 1
   },
   "vars": {
-    "ENVIRONMENT": "production"
+    "ENVIRONMENT": "production",
+    "SESSION_SECRET": "7ee5dab3c9a556c1cd73062f457a0f93b8b44995f3d0711e7b79df503e43b21b"
   }
 }
