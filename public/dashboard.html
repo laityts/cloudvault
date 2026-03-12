@@ -89,9 +89,12 @@
     <main class="flex-1 flex flex-col min-w-0">
       <!-- 操作栏 -->
       <div class="flex flex-wrap items-center gap-2 p-3 border-b" style="border-color:var(--border)">
-        <!-- 面包屑 -->
+        <!-- 面包屑 - 修改点：在“首页”链接前添加房子图标 -->
         <div class="breadcrumb flex items-center gap-1 text-sm mr-auto flex-wrap">
-          <a href="#" @click.prevent="navigateFolder('root')">首页</a>
+          <a href="#" @click.prevent="navigateFolder('root')" class="flex items-center gap-1">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.25 12l8.954-8.955a1.126 1.126 0 011.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"/></svg>
+            首页
+          </a>
           <template x-for="(part, i) in currentFolder === 'root' ? [] : currentFolder.split('/')" :key="i">
             <span class="flex items-center gap-1">
               <svg class="w-3 h-3" style="color:var(--text-muted)" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
