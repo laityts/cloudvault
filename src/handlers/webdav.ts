@@ -1,4 +1,4 @@
-import { Env, FileMeta, KV_PREFIX } from '../utils/types';
+import { Env, FileMeta } from '../utils/types';
 import { getMimeType } from '../utils/response';
 import {
   multistatusResponse,
@@ -32,60 +32,64 @@ function toR2Key(folder: string, name: string): string {
 }
 
 async function getAllFiles(env: Env): Promise<FileMeta[]> {
-  const files: FileMeta[] = [];
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: KV_PREFIX.FILE, limit: 1000, cursor });
-    for (const key of result.keys) {
-      const raw = await env.VAULT_KV.get(key.name);
-      if (raw) {
-        try { files.push(JSON.parse(raw)); } catch { /* skip */ }
-      }
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
-  return files;
+  const rows = await env.DB.prepare(
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files`
+  ).all();
+  return rows.results.map(r => ({
+    id: r.id, key: r.key, name: r.name, size: r.size, type: r.type, folder: r.folder,
+    uploadedAt: r.uploadedAt, shareToken: r.shareToken, sharePassword: r.sharePassword,
+    shareExpiresAt: r.shareExpiresAt, downloads: r.downloads,
+  }));
 }
 
 async function getAllFolders(env: Env): Promise<Map<string, string>> {
-  const folders = new Map<string, string>();
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: 'folder:', limit: 1000, cursor });
-    for (const key of result.keys) {
-      const name = key.name.replace('folder:', '');
-      const raw = await env.VAULT_KV.get(key.name);
-      let createdAt = '';
-      if (raw) {
-        try { createdAt = JSON.parse(raw).createdAt || ''; } catch { /* skip */ }
-      }
-      if (name) folders.set(name, createdAt);
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
+  const rows = await env.DB.prepare(`SELECT path, created_at FROM folders`).all();
+  const map = new Map<string, string>();
+  for (const row of rows.results) {
+    map.set(row.path as string, row.created_at as string || new Date().toISOString());
   }
-  return folders;
+  return map;
 }
 
 async function updateStatsCounters(env: Env, sizeDelta: number, countDelta: number): Promise<void> {
-  const [rawSize, rawCount] = await Promise.all([
-    env.VAULT_KV.get(KV_PREFIX.STATS + 'totalSize'),
-    env.VAULT_KV.get(KV_PREFIX.STATS + 'totalFiles'),
-  ]);
-  const newSize = Math.max(0, (parseInt(rawSize || '0', 10) + sizeDelta));
-  const newCount = Math.max(0, (parseInt(rawCount || '0', 10) + countDelta));
-  await Promise.all([
-    env.VAULT_KV.put(KV_PREFIX.STATS + 'totalSize', String(newSize)),
-    env.VAULT_KV.put(KV_PREFIX.STATS + 'totalFiles', String(newCount)),
-  ]);
+  await env.DB.prepare(
+    `INSERT INTO stats (id, total_files, total_size) VALUES (1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET total_files = total_files + ?, total_size = total_size + ?`
+  ).bind(countDelta, sizeDelta, countDelta, sizeDelta).run();
 }
 
 async function findFileByDavPath(env: Env, davPath: string): Promise<FileMeta | null> {
   const folder = toFolder(davPath);
   const name = toFileName(davPath);
-  const allFiles = await getAllFiles(env);
-  return allFiles.find(f => f.folder === folder && f.name === name) || null;
+  const row = await env.DB.prepare(
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files WHERE folder = ? AND name = ?`
+  ).bind(folder, name).first<{
+    id: string; key: string; name: string; size: number; type: string; folder: string;
+    uploadedAt: string; shareToken: string | null; sharePassword: string | null;
+    shareExpiresAt: string | null; downloads: number;
+  }>();
+  if (!row) return null;
+  return {
+    ...row,
+    uploadedAt: row.uploadedAt,
+    shareToken: row.shareToken,
+    sharePassword: row.sharePassword,
+    shareExpiresAt: row.shareExpiresAt,
+  };
+}
+
+async function ensureFolderChain(env: Env, folderPath: string): Promise<void> {
+  const parts = folderPath.split('/');
+  let path = '';
+  for (const part of parts) {
+    path = path ? path + '/' + part : part;
+    const exists = await env.DB.prepare(`SELECT path FROM folders WHERE path = ?`).bind(path).first();
+    if (!exists) {
+      await env.DB.prepare(
+        `INSERT INTO folders (path, created_at) VALUES (?, ?)`
+      ).bind(path, new Date().toISOString()).run();
+    }
+  }
 }
 
 export async function handleWebDav(request: Request, env: Env): Promise<Response> {
@@ -388,11 +392,9 @@ async function handlePut(request: Request, env: Env): Promise<Response> {
     if (!r2Object) return new Response('Upload failed', { status: 500 });
 
     const sizeDelta = r2Object.size - existingFile.size;
-    existingFile.key = key;
-    existingFile.size = r2Object.size;
-    existingFile.type = contentType;
-    existingFile.uploadedAt = new Date().toISOString();
-    await env.VAULT_KV.put(KV_PREFIX.FILE + existingFile.id, JSON.stringify(existingFile));
+    await env.DB.prepare(
+      `UPDATE files SET key = ?, size = ?, type = ?, uploaded_at = ? WHERE id = ?`
+    ).bind(key, r2Object.size, contentType, new Date().toISOString(), existingFile.id).run();
     if (sizeDelta !== 0) await updateStatsCounters(env, sizeDelta, 0);
 
     return new Response(null, { status: 204 });
@@ -426,22 +428,16 @@ async function handlePut(request: Request, env: Env): Promise<Response> {
     downloads: 0,
   };
 
-  await env.VAULT_KV.put(KV_PREFIX.FILE + id, JSON.stringify(meta));
+  await env.DB.prepare(
+    `INSERT INTO files (id, key, name, size, type, folder, uploaded_at, share_token, share_password, share_expires_at, downloads)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    meta.id, meta.key, meta.name, meta.size, meta.type, meta.folder, meta.uploadedAt,
+    meta.shareToken, meta.sharePassword, meta.shareExpiresAt, meta.downloads
+  ).run();
   await updateStatsCounters(env, meta.size, 1);
 
   return new Response(null, { status: 201 });
-}
-
-async function ensureFolderChain(env: Env, folderPath: string): Promise<void> {
-  const parts = folderPath.split('/');
-  let path = '';
-  for (const part of parts) {
-    path = path ? path + '/' + part : part;
-    const existing = await env.VAULT_KV.get('folder:' + path);
-    if (!existing) {
-      await env.VAULT_KV.put('folder:' + path, JSON.stringify({ name: path, createdAt: new Date().toISOString() }));
-    }
-  }
 }
 
 async function handleDelete(request: Request, env: Env): Promise<Response> {
@@ -451,10 +447,7 @@ async function handleDelete(request: Request, env: Env): Promise<Response> {
   const file = await findFileByDavPath(env, davPath);
   if (file) {
     await env.VAULT_BUCKET.delete(file.key);
-    await env.VAULT_KV.delete(KV_PREFIX.FILE + file.id);
-    if (file.shareToken) {
-      await env.VAULT_KV.delete(KV_PREFIX.SHARE + file.shareToken);
-    }
+    await env.DB.prepare(`DELETE FROM files WHERE id = ?`).bind(file.id).run();
     await updateStatsCounters(env, -file.size, -1);
     return new Response(null, { status: 204 });
   }
@@ -465,28 +458,36 @@ async function handleDelete(request: Request, env: Env): Promise<Response> {
 
   if (!isFolder) return new Response('Not Found', { status: 404 });
 
-  await env.VAULT_KV.delete('folder:' + davPath);
+  // 删除文件夹本身
+  await env.DB.prepare(`DELETE FROM folders WHERE path = ?`).bind(davPath).run();
 
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: 'folder:' + davPath + '/', limit: 1000, cursor });
-    for (const key of result.keys) {
-      await env.VAULT_KV.delete(key.name);
+  // 删除子文件夹
+  const subFolders = await env.DB.prepare(
+    `SELECT path FROM folders WHERE path LIKE ?`
+  ).bind(davPath + '/%').all();
+  for (const row of subFolders.results) {
+    await env.DB.prepare(`DELETE FROM folders WHERE path = ?`).bind(row.path).run();
+    // 删除相关的分享和排除
+    await env.DB.prepare(`DELETE FROM folder_shares WHERE folder = ?`).bind(row.path).run();
+    await env.DB.prepare(`DELETE FROM folder_excludes WHERE folder = ?`).bind(row.path).run();
+    const linkMeta = await env.DB.prepare(`SELECT token FROM folder_share_meta WHERE folder = ?`).bind(row.path).first<{ token: string }>();
+    if (linkMeta) {
+      await env.DB.prepare(`DELETE FROM folder_share_links WHERE token = ?`).bind(linkMeta.token).run();
+      await env.DB.prepare(`DELETE FROM folder_share_meta WHERE folder = ?`).bind(row.path).run();
     }
-    if (result.list_complete) break;
-    cursor = result.cursor;
   }
 
+  // 删除包含的文件
+  const filesToDelete = await env.DB.prepare(
+    `SELECT id, key, size FROM files WHERE folder = ? OR folder LIKE ?`
+  ).bind(davPath, davPath + '/%').all();
   let totalSizeRemoved = 0;
   let deletedCount = 0;
-  for (const f of allFiles) {
-    if (f.folder === davPath || f.folder.startsWith(davPath + '/')) {
-      await env.VAULT_BUCKET.delete(f.key);
-      await env.VAULT_KV.delete(KV_PREFIX.FILE + f.id);
-      if (f.shareToken) await env.VAULT_KV.delete(KV_PREFIX.SHARE + f.shareToken);
-      totalSizeRemoved += f.size;
-      deletedCount++;
-    }
+  for (const row of filesToDelete.results) {
+    await env.VAULT_BUCKET.delete(row.key as string);
+    await env.DB.prepare(`DELETE FROM files WHERE id = ?`).bind(row.id).run();
+    totalSizeRemoved += row.size as number;
+    deletedCount++;
   }
 
   if (deletedCount > 0) {
@@ -516,7 +517,9 @@ async function handleMkcol(request: Request, env: Env): Promise<Response> {
     if (!parentExists) return new Response('Conflict', { status: 409 });
   }
 
-  await env.VAULT_KV.put('folder:' + davPath, JSON.stringify({ name: davPath, createdAt: new Date().toISOString() }));
+  await env.DB.prepare(
+    `INSERT INTO folders (path, created_at) VALUES (?, ?)`
+  ).bind(davPath, new Date().toISOString()).run();
 
   return new Response('Created', { status: 201 });
 }
@@ -537,8 +540,7 @@ async function handleMove(request: Request, env: Env): Promise<Response> {
 
     if (destFile) {
       await env.VAULT_BUCKET.delete(destFile.key);
-      await env.VAULT_KV.delete(KV_PREFIX.FILE + destFile.id);
-      if (destFile.shareToken) await env.VAULT_KV.delete(KV_PREFIX.SHARE + destFile.shareToken);
+      await env.DB.prepare(`DELETE FROM files WHERE id = ?`).bind(destFile.id).run();
       await updateStatsCounters(env, -destFile.size, -1);
     }
 
@@ -557,10 +559,9 @@ async function handleMove(request: Request, env: Env): Promise<Response> {
     });
     await env.VAULT_BUCKET.delete(file.key);
 
-    file.key = newKey;
-    file.folder = newFolder;
-    file.name = newName;
-    await env.VAULT_KV.put(KV_PREFIX.FILE + file.id, JSON.stringify(file));
+    await env.DB.prepare(
+      `UPDATE files SET key = ?, folder = ?, name = ? WHERE id = ?`
+    ).bind(newKey, newFolder, newName, file.id).run();
 
     return new Response(null, { status: destFile ? 204 : 201 });
   }
@@ -585,8 +586,7 @@ async function handleCopy(request: Request, env: Env): Promise<Response> {
 
   if (destFile) {
     await env.VAULT_BUCKET.delete(destFile.key);
-    await env.VAULT_KV.delete(KV_PREFIX.FILE + destFile.id);
-    if (destFile.shareToken) await env.VAULT_KV.delete(KV_PREFIX.SHARE + destFile.shareToken);
+    await env.DB.prepare(`DELETE FROM files WHERE id = ?`).bind(destFile.id).run();
     await updateStatsCounters(env, -destFile.size, -1);
   }
 
@@ -619,7 +619,13 @@ async function handleCopy(request: Request, env: Env): Promise<Response> {
     downloads: 0,
   };
 
-  await env.VAULT_KV.put(KV_PREFIX.FILE + newId, JSON.stringify(meta));
+  await env.DB.prepare(
+    `INSERT INTO files (id, key, name, size, type, folder, uploaded_at, share_token, share_password, share_expires_at, downloads)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    meta.id, meta.key, meta.name, meta.size, meta.type, meta.folder, meta.uploadedAt,
+    meta.shareToken, meta.sharePassword, meta.shareExpiresAt, meta.downloads
+  ).run();
   await updateStatsCounters(env, meta.size, 1);
 
   return new Response(null, { status: destFile ? 204 : 201 });

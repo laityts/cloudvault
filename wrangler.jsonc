@@ -16,10 +16,11 @@
       "bucket_name": "cloudvault"
     }
   ],
-  "kv_namespaces": [
+  "d1_databases": [
     {
-      "binding": "VAULT_KV",
-      "id": "a128479cc4d74272b07b957db2ed68c2"
+      "binding": "DB",
+      "database_name": "cloudvault",
+      "database_id": "ca0fccc4-72aa-447d-91da-19597df6e825"
     }
   ],
   "observability": {

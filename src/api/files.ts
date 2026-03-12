@@ -1,4 +1,4 @@
-import { Env, FileMeta, KV_PREFIX } from '../utils/types';
+import { Env, FileMeta } from '../utils/types';
 import { json, error, getMimeType } from '../utils/response';
 import { getSharedFolders, getExcludedFolders, isFolderShared } from './share';
 
@@ -8,35 +8,51 @@ function extractId(url: URL): string | null {
   return idx >= 0 && parts[idx + 1] ? parts[idx + 1] : null;
 }
 
-async function getAllFiles(env: Env): Promise<FileMeta[]> {
-  const files: FileMeta[] = [];
-  let cursor: string | undefined;
+async function getFileById(env: Env, id: string): Promise<FileMeta | null> {
+  const row = await env.DB.prepare(
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files WHERE id = ?`
+  ).bind(id).first<{
+    id: string; key: string; name: string; size: number; type: string; folder: string;
+    uploadedAt: string; shareToken: string | null; sharePassword: string | null;
+    shareExpiresAt: string | null; downloads: number;
+  }>();
+  if (!row) return null;
+  return {
+    ...row,
+    uploadedAt: row.uploadedAt,
+    shareToken: row.shareToken,
+    sharePassword: row.sharePassword,
+    shareExpiresAt: row.shareExpiresAt,
+  };
+}
 
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: KV_PREFIX.FILE, limit: 1000, cursor });
-    for (const key of result.keys) {
-      const raw = await env.VAULT_KV.get(key.name);
-      if (raw) {
-        try { files.push(JSON.parse(raw)); } catch { /* skip corrupted entries */ }
-      }
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
-  return files;
+async function getFilesByFolder(env: Env, folder: string): Promise<FileMeta[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files WHERE folder = ?`
+  ).bind(folder).all();
+  return rows.results.map(r => ({
+    id: r.id, key: r.key, name: r.name, size: r.size, type: r.type, folder: r.folder,
+    uploadedAt: r.uploadedAt, shareToken: r.shareToken, sharePassword: r.sharePassword,
+    shareExpiresAt: r.shareExpiresAt, downloads: r.downloads,
+  }));
+}
+
+async function getAllFiles(env: Env): Promise<FileMeta[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files`
+  ).all();
+  return rows.results.map(r => ({
+    id: r.id, key: r.key, name: r.name, size: r.size, type: r.type, folder: r.folder,
+    uploadedAt: r.uploadedAt, shareToken: r.shareToken, sharePassword: r.sharePassword,
+    shareExpiresAt: r.shareExpiresAt, downloads: r.downloads,
+  }));
 }
 
 async function updateStatsCounters(env: Env, sizeDelta: number, countDelta: number): Promise<void> {
-  const [rawSize, rawCount] = await Promise.all([
-    env.VAULT_KV.get(KV_PREFIX.STATS + 'totalSize'),
-    env.VAULT_KV.get(KV_PREFIX.STATS + 'totalFiles'),
-  ]);
-  const newSize = Math.max(0, (parseInt(rawSize || '0', 10) + sizeDelta));
-  const newCount = Math.max(0, (parseInt(rawCount || '0', 10) + countDelta));
-  await Promise.all([
-    env.VAULT_KV.put(KV_PREFIX.STATS + 'totalSize', String(newSize)),
-    env.VAULT_KV.put(KV_PREFIX.STATS + 'totalFiles', String(newCount)),
-  ]);
+  await env.DB.prepare(
+    `INSERT INTO stats (id, total_files, total_size) VALUES (1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET total_files = total_files + ?, total_size = total_size + ?`
+  ).bind(countDelta, sizeDelta, countDelta, sizeDelta).run();
 }
 
 export async function upload(request: Request, env: Env): Promise<Response> {
@@ -91,7 +107,14 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
     downloads: 0,
   };
 
-  await env.VAULT_KV.put(KV_PREFIX.FILE + id, JSON.stringify(meta));
+  await env.DB.prepare(
+    `INSERT INTO files (id, key, name, size, type, folder, uploaded_at, share_token, share_password, share_expires_at, downloads)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    meta.id, meta.key, meta.name, meta.size, meta.type, meta.folder, meta.uploadedAt,
+    meta.shareToken, meta.sharePassword, meta.shareExpiresAt, meta.downloads
+  ).run();
+
   await updateStatsCounters(env, meta.size, 1);
 
   return json(meta, 201);
@@ -154,7 +177,14 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
     downloads: 0,
   };
 
-  await env.VAULT_KV.put(KV_PREFIX.FILE + id, JSON.stringify(meta));
+  await env.DB.prepare(
+    `INSERT INTO files (id, key, name, size, type, folder, uploaded_at, share_token, share_password, share_expires_at, downloads)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    meta.id, meta.key, meta.name, meta.size, meta.type, meta.folder, meta.uploadedAt,
+    meta.shareToken, meta.sharePassword, meta.shareExpiresAt, meta.downloads
+  ).run();
+
   await updateStatsCounters(env, meta.size, 1);
 
   return json(meta, 201);
@@ -165,18 +195,31 @@ export async function list(request: Request, env: Env): Promise<Response> {
   const folderFilter = url.searchParams.get('folder');
   const searchFilter = url.searchParams.get('search')?.toLowerCase();
 
-  let files = await getAllFiles(env);
+  let query = `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files`;
+  const conditions: string[] = [];
+  const params: any[] = [];
 
   if (folderFilter) {
-    files = files.filter(f => f.folder === folderFilter);
+    conditions.push(`folder = ?`);
+    params.push(folderFilter);
   } else if (!searchFilter) {
-    files = files.filter(f => f.folder === 'root');
+    conditions.push(`folder = 'root'`);
   }
   if (searchFilter) {
-    files = files.filter(f => f.name.toLowerCase().includes(searchFilter));
+    conditions.push(`LOWER(name) LIKE ?`);
+    params.push(`%${searchFilter}%`);
   }
+  if (conditions.length) {
+    query += ` WHERE ` + conditions.join(' AND ');
+  }
+  query += ` ORDER BY uploaded_at DESC`;
 
-  files.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+  const rows = await env.DB.prepare(query).bind(...params).all();
+  const files = rows.results.map(r => ({
+    id: r.id, key: r.key, name: r.name, size: r.size, type: r.type, folder: r.folder,
+    uploadedAt: r.uploadedAt, shareToken: r.shareToken, sharePassword: r.sharePassword,
+    shareExpiresAt: r.shareExpiresAt, downloads: r.downloads,
+  }));
 
   return json({ files, cursor: null, totalFiles: files.length });
 }
@@ -186,10 +229,10 @@ export async function get(request: Request, env: Env): Promise<Response> {
   const id = extractId(url);
   if (!id) return error('File ID required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-  if (!raw) return error('File not found', 404);
+  const meta = await getFileById(env, id);
+  if (!meta) return error('File not found', 404);
 
-  return json(JSON.parse(raw));
+  return json(meta);
 }
 
 export async function download(request: Request, env: Env): Promise<Response> {
@@ -198,9 +241,8 @@ export async function download(request: Request, env: Env): Promise<Response> {
   const id = parts[parts.indexOf('files') + 1];
   if (!id) return error('File ID required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-  if (!raw) return error('File not found', 404);
-  const meta: FileMeta = JSON.parse(raw);
+  const meta = await getFileById(env, id);
+  if (!meta) return error('File not found', 404);
 
   const object = await env.VAULT_BUCKET.get(meta.key);
   if (!object) return error('File not found in storage', 404);
@@ -232,16 +274,13 @@ export async function deleteFiles(request: Request, env: Env): Promise<Response>
 
   let totalSizeRemoved = 0;
   for (const id of ids) {
-    const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-    if (!raw) continue;
+    const meta = await getFileById(env, id);
+    if (!meta) continue;
 
-    const meta: FileMeta = JSON.parse(raw);
     await env.VAULT_BUCKET.delete(meta.key);
-    await env.VAULT_KV.delete(KV_PREFIX.FILE + id);
+    await env.DB.prepare(`DELETE FROM files WHERE id = ?`).bind(id).run();
 
-    if (meta.shareToken) {
-      await env.VAULT_KV.delete(KV_PREFIX.SHARE + meta.shareToken);
-    }
+    // 分享token在文件表中，删除文件即失效
     totalSizeRemoved += meta.size;
   }
 
@@ -255,16 +294,18 @@ export async function rename(request: Request, env: Env): Promise<Response> {
   const id = extractId(url);
   if (!id) return error('File ID required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-  if (!raw) return error('File not found', 404);
+  const meta = await getFileById(env, id);
+  if (!meta) return error('File not found', 404);
 
   const body = await request.json<{ name: string }>();
   if (!body.name?.trim()) return error('Name required', 400);
 
-  const meta: FileMeta = JSON.parse(raw);
-  meta.name = body.name.trim();
-  await env.VAULT_KV.put(KV_PREFIX.FILE + id, JSON.stringify(meta));
+  const newName = body.name.trim();
+  await env.DB.prepare(
+    `UPDATE files SET name = ? WHERE id = ?`
+  ).bind(newName, id).run();
 
+  meta.name = newName;
   return json(meta);
 }
 
@@ -273,7 +314,9 @@ export async function createFolder(request: Request, env: Env): Promise<Response
   if (!body.name?.trim()) return error('Folder name required', 400);
 
   const folderName = body.parent === 'root' ? body.name.trim() : body.parent + '/' + body.name.trim();
-  await env.VAULT_KV.put('folder:' + folderName, JSON.stringify({ name: folderName, createdAt: new Date().toISOString() }));
+  await env.DB.prepare(
+    `INSERT INTO folders (path, created_at) VALUES (?, ?)`
+  ).bind(folderName, new Date().toISOString()).run();
 
   return json({ folder: folderName }, 201);
 }
@@ -283,69 +326,54 @@ export async function deleteFolder(request: Request, env: Env): Promise<Response
   if (!body.folder?.trim()) return error('Folder name required', 400);
   const folder = body.folder.trim();
 
-  // Delete the folder KV entry
-  await env.VAULT_KV.delete('folder:' + folder);
+  // 删除文件夹条目
+  await env.DB.prepare(`DELETE FROM folders WHERE path = ?`).bind(folder).run();
 
-  // Delete any share keys for this folder
-  await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE + folder);
-  await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_EXCLUDE + folder);
+  // 删除相关的分享和排除记录
+  await env.DB.prepare(`DELETE FROM folder_shares WHERE folder = ?`).bind(folder).run();
+  await env.DB.prepare(`DELETE FROM folder_excludes WHERE folder = ?`).bind(folder).run();
 
-  // Clean up folder share link for this folder
-  const metaRaw = await env.VAULT_KV.get(KV_PREFIX.FOLDER_SHARE_LINK + 'meta:' + folder);
-  if (metaRaw) {
-    try {
-      const meta = JSON.parse(metaRaw);
-      await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_LINK + meta.token);
-    } catch { /* ignore parse errors */ }
-    await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_LINK + 'meta:' + folder);
+  // 删除文件夹分享链接
+  const linkMeta = await env.DB.prepare(`SELECT token FROM folder_share_meta WHERE folder = ?`).bind(folder).first<{ token: string }>();
+  if (linkMeta) {
+    await env.DB.prepare(`DELETE FROM folder_share_links WHERE token = ?`).bind(linkMeta.token).run();
+    await env.DB.prepare(`DELETE FROM folder_share_meta WHERE folder = ?`).bind(folder).run();
   }
 
-  // Delete sub-folder KV entries and their share links
-  let cursor: string | undefined;
-  let deletedSubfolders = 0;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: 'folder:' + folder + '/', limit: 1000, cursor });
-    for (const key of result.keys) {
-      await env.VAULT_KV.delete(key.name);
-      const subName = key.name.replace('folder:', '');
-      await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE + subName);
-      await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_EXCLUDE + subName);
-      // Clean up sub-folder share link
-      const subMetaRaw = await env.VAULT_KV.get(KV_PREFIX.FOLDER_SHARE_LINK + 'meta:' + subName);
-      if (subMetaRaw) {
-        try {
-          const subMeta = JSON.parse(subMetaRaw);
-          await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_LINK + subMeta.token);
-        } catch { /* ignore */ }
-        await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_LINK + 'meta:' + subName);
-      }
-      deletedSubfolders++;
+  // 删除子文件夹
+  const subFolders = await env.DB.prepare(
+    `SELECT path FROM folders WHERE path LIKE ?`
+  ).bind(folder + '/%').all();
+  for (const row of subFolders.results) {
+    const sub = row.path as string;
+    await env.DB.prepare(`DELETE FROM folders WHERE path = ?`).bind(sub).run();
+    await env.DB.prepare(`DELETE FROM folder_shares WHERE folder = ?`).bind(sub).run();
+    await env.DB.prepare(`DELETE FROM folder_excludes WHERE folder = ?`).bind(sub).run();
+    const subLink = await env.DB.prepare(`SELECT token FROM folder_share_meta WHERE folder = ?`).bind(sub).first<{ token: string }>();
+    if (subLink) {
+      await env.DB.prepare(`DELETE FROM folder_share_links WHERE token = ?`).bind(subLink.token).run();
+      await env.DB.prepare(`DELETE FROM folder_share_meta WHERE folder = ?`).bind(sub).run();
     }
-    if (result.list_complete) break;
-    cursor = result.cursor;
   }
 
-  // Delete all contained files (R2 objects + KV entries + share tokens)
-  const allFiles = await getAllFiles(env);
-  let deletedFiles = 0;
+  // 删除包含的文件
+  const filesToDelete = await env.DB.prepare(
+    `SELECT id, key, size FROM files WHERE folder = ? OR folder LIKE ?`
+  ).bind(folder, folder + '/%').all();
   let totalSizeRemoved = 0;
-  for (const file of allFiles) {
-    if (file.folder === folder || file.folder.startsWith(folder + '/')) {
-      await env.VAULT_BUCKET.delete(file.key);
-      await env.VAULT_KV.delete(KV_PREFIX.FILE + file.id);
-      if (file.shareToken) {
-        await env.VAULT_KV.delete(KV_PREFIX.SHARE + file.shareToken);
-      }
-      totalSizeRemoved += file.size;
-      deletedFiles++;
-    }
+  let deletedCount = 0;
+  for (const row of filesToDelete.results) {
+    await env.VAULT_BUCKET.delete(row.key as string);
+    await env.DB.prepare(`DELETE FROM files WHERE id = ?`).bind(row.id).run();
+    totalSizeRemoved += row.size as number;
+    deletedCount++;
   }
 
-  if (deletedFiles > 0) {
-    await updateStatsCounters(env, -totalSizeRemoved, -deletedFiles);
+  if (deletedCount > 0) {
+    await updateStatsCounters(env, -totalSizeRemoved, -deletedCount);
   }
 
-  return json({ deleted: folder, deletedFiles, deletedSubfolders });
+  return json({ deleted: folder, deletedFiles: deletedCount, deletedSubfolders: subFolders.results.length });
 }
 
 export async function renameFolder(request: Request, env: Env): Promise<Response> {
@@ -355,93 +383,104 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
   const newName = body.newName.trim();
   if (oldName === newName) return json({ folder: newName });
 
-  // Create new folder entry
-  await env.VAULT_KV.put('folder:' + newName, JSON.stringify({ name: newName, createdAt: new Date().toISOString() }));
-  await env.VAULT_KV.delete('folder:' + oldName);
+  // 更新文件夹本身
+  await env.DB.prepare(
+    `UPDATE folders SET path = ? WHERE path = ?`
+  ).bind(newName, oldName).run();
 
-  // Transfer share status
-  const shareVal = await env.VAULT_KV.get(KV_PREFIX.FOLDER_SHARE + oldName);
-  if (shareVal) {
-    await env.VAULT_KV.put(KV_PREFIX.FOLDER_SHARE + newName, shareVal);
-    await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE + oldName);
-  }
-  const excludeVal = await env.VAULT_KV.get(KV_PREFIX.FOLDER_SHARE_EXCLUDE + oldName);
-  if (excludeVal) {
-    await env.VAULT_KV.put(KV_PREFIX.FOLDER_SHARE_EXCLUDE + newName, excludeVal);
-    await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_EXCLUDE + oldName);
+  // 更新子文件夹路径
+  const subFolders = await env.DB.prepare(
+    `SELECT path FROM folders WHERE path LIKE ?`
+  ).bind(oldName + '/%').all();
+  for (const row of subFolders.results) {
+    const oldSub = row.path as string;
+    const newSub = newName + oldSub.slice(oldName.length);
+    await env.DB.prepare(
+      `UPDATE folders SET path = ? WHERE path = ?`
+    ).bind(newSub, oldSub).run();
   }
 
-  // Rename sub-folders
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: 'folder:' + oldName + '/', limit: 1000, cursor });
-    for (const key of result.keys) {
-      const subOld = key.name.replace('folder:', '');
-      const subNew = newName + subOld.slice(oldName.length);
-      const val = await env.VAULT_KV.get(key.name);
-      if (val) await env.VAULT_KV.put('folder:' + subNew, val);
-      await env.VAULT_KV.delete(key.name);
-      const subShare = await env.VAULT_KV.get(KV_PREFIX.FOLDER_SHARE + subOld);
-      if (subShare) {
-        await env.VAULT_KV.put(KV_PREFIX.FOLDER_SHARE + subNew, subShare);
-        await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE + subOld);
-      }
-      const subExcl = await env.VAULT_KV.get(KV_PREFIX.FOLDER_SHARE_EXCLUDE + subOld);
-      if (subExcl) {
-        await env.VAULT_KV.put(KV_PREFIX.FOLDER_SHARE_EXCLUDE + subNew, subExcl);
-        await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_EXCLUDE + subOld);
-      }
+  // 更新folder_shares
+  const share = await env.DB.prepare(`SELECT * FROM folder_shares WHERE folder = ?`).bind(oldName).first();
+  if (share) {
+    await env.DB.prepare(`DELETE FROM folder_shares WHERE folder = ?`).bind(oldName).run();
+    await env.DB.prepare(`INSERT INTO folder_shares (folder, shared_at) VALUES (?, ?)`).bind(newName, share.shared_at).run();
+  }
+  const subShares = await env.DB.prepare(`SELECT folder, shared_at FROM folder_shares WHERE folder LIKE ?`).bind(oldName + '/%').all();
+  for (const row of subShares.results) {
+    const oldSub = row.folder as string;
+    const newSub = newName + oldSub.slice(oldName.length);
+    await env.DB.prepare(`DELETE FROM folder_shares WHERE folder = ?`).bind(oldSub).run();
+    await env.DB.prepare(`INSERT INTO folder_shares (folder, shared_at) VALUES (?, ?)`).bind(newSub, row.shared_at).run();
+  }
+
+  // 更新folder_excludes
+  const exclude = await env.DB.prepare(`SELECT * FROM folder_excludes WHERE folder = ?`).bind(oldName).first();
+  if (exclude) {
+    await env.DB.prepare(`DELETE FROM folder_excludes WHERE folder = ?`).bind(oldName).run();
+    await env.DB.prepare(`INSERT INTO folder_excludes (folder, excluded_at) VALUES (?, ?)`).bind(newName, exclude.excluded_at).run();
+  }
+  const subExcludes = await env.DB.prepare(`SELECT folder, excluded_at FROM folder_excludes WHERE folder LIKE ?`).bind(oldName + '/%').all();
+  for (const row of subExcludes.results) {
+    const oldSub = row.folder as string;
+    const newSub = newName + oldSub.slice(oldName.length);
+    await env.DB.prepare(`DELETE FROM folder_excludes WHERE folder = ?`).bind(oldSub).run();
+    await env.DB.prepare(`INSERT INTO folder_excludes (folder, excluded_at) VALUES (?, ?)`).bind(newSub, row.excluded_at).run();
+  }
+
+  // 更新folder_share_meta
+  const linkMeta = await env.DB.prepare(`SELECT * FROM folder_share_meta WHERE folder = ?`).bind(oldName).first();
+  if (linkMeta) {
+    await env.DB.prepare(`DELETE FROM folder_share_meta WHERE folder = ?`).bind(oldName).run();
+    await env.DB.prepare(`INSERT INTO folder_share_meta (folder, token, password_hash, expires_at) VALUES (?, ?, ?, ?)`)
+      .bind(newName, linkMeta.token, linkMeta.password_hash, linkMeta.expires_at).run();
+  }
+  const subLinkMetas = await env.DB.prepare(`SELECT folder, token, password_hash, expires_at FROM folder_share_meta WHERE folder LIKE ?`).bind(oldName + '/%').all();
+  for (const row of subLinkMetas.results) {
+    const oldSub = row.folder as string;
+    const newSub = newName + oldSub.slice(oldName.length);
+    await env.DB.prepare(`DELETE FROM folder_share_meta WHERE folder = ?`).bind(oldSub).run();
+    await env.DB.prepare(`INSERT INTO folder_share_meta (folder, token, password_hash, expires_at) VALUES (?, ?, ?, ?)`)
+      .bind(newSub, row.token, row.password_hash, row.expires_at).run();
+  }
+
+  // 更新files表中的folder路径
+  const files = await env.DB.prepare(
+    `SELECT id, key, folder FROM files WHERE folder = ? OR folder LIKE ?`
+  ).bind(oldName, oldName + '/%').all();
+  for (const row of files.results) {
+    const oldFolder = row.folder as string;
+    const newFolder = newName + oldFolder.slice(oldName.length);
+    const oldKey = row.key as string;
+    const newKey = newFolder === 'root' ? oldKey.split('/').pop()! : newFolder + '/' + oldKey.split('/').pop()!;
+    // 移动R2对象
+    const obj = await env.VAULT_BUCKET.get(oldKey);
+    if (obj) {
+      await env.VAULT_BUCKET.put(newKey, obj.body, {
+        httpMetadata: obj.httpMetadata,
+        customMetadata: obj.customMetadata,
+      });
+      await env.VAULT_BUCKET.delete(oldKey);
     }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
-
-  // Update file paths
-  const allFiles = await getAllFiles(env);
-  for (const file of allFiles) {
-    if (file.folder === oldName || file.folder.startsWith(oldName + '/')) {
-      const newFolder = newName + file.folder.slice(oldName.length);
-      const newKey = newFolder === 'root' ? file.name : newFolder + '/' + file.name;
-      const obj = await env.VAULT_BUCKET.get(file.key);
-      if (obj) {
-        await env.VAULT_BUCKET.put(newKey, obj.body, {
-          httpMetadata: obj.httpMetadata,
-          customMetadata: obj.customMetadata,
-        });
-        await env.VAULT_BUCKET.delete(file.key);
-      }
-      file.key = newKey;
-      file.folder = newFolder;
-      await env.VAULT_KV.put(KV_PREFIX.FILE + file.id, JSON.stringify(file));
-    }
+    await env.DB.prepare(
+      `UPDATE files SET folder = ?, key = ? WHERE id = ?`
+    ).bind(newFolder, newKey, row.id).run();
   }
 
   return json({ folder: newName });
 }
 
 export async function listFolders(_request: Request, env: Env): Promise<Response> {
-  const files = await getAllFiles(env);
-  const folderSet = new Set<string>();
+  // 获取所有文件夹路径（从folders表）
+  const folderRows = await env.DB.prepare(`SELECT path FROM folders`).all();
+  const folderSet = new Set<string>(folderRows.results.map(r => r.path as string));
 
-  for (const file of files) {
-    if (file.folder && file.folder !== 'root') {
-      folderSet.add(file.folder);
-    }
-  }
-
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: 'folder:', limit: 1000, cursor });
-    for (const key of result.keys) {
-      const name = key.name.replace('folder:', '');
-      if (name) folderSet.add(name);
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
-
-  // Ensure all intermediate parent folders are included in the set
-  for (const folder of [...folderSet]) {
+  // 从files表中获取所有不同的folder（可能有一些文件夹没有在folders表中）
+  const fileFolders = await env.DB.prepare(`SELECT DISTINCT folder FROM files WHERE folder != 'root'`).all();
+  for (const row of fileFolders.results) {
+    const folder = row.folder as string;
+    folderSet.add(folder);
+    // 添加所有父路径
     const parts = folder.split('/');
     let path = '';
     for (let i = 0; i < parts.length - 1; i++) {
@@ -471,10 +510,8 @@ export async function moveFiles(request: Request, env: Env): Promise<Response> {
   let moved = 0;
 
   for (const id of body.ids) {
-    const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-    if (!raw) continue;
-
-    const meta: FileMeta = JSON.parse(raw);
+    const meta = await getFileById(env, id);
+    if (!meta) continue;
     if (meta.folder === targetFolder) continue;
 
     const newKey = targetFolder === 'root' ? meta.name : targetFolder + '/' + meta.name;
@@ -488,9 +525,9 @@ export async function moveFiles(request: Request, env: Env): Promise<Response> {
     });
     await env.VAULT_BUCKET.delete(meta.key);
 
-    meta.key = newKey;
-    meta.folder = targetFolder;
-    await env.VAULT_KV.put(KV_PREFIX.FILE + id, JSON.stringify(meta));
+    await env.DB.prepare(
+      `UPDATE files SET folder = ?, key = ? WHERE id = ?`
+    ).bind(targetFolder, newKey, id).run();
     moved++;
   }
 
@@ -503,9 +540,8 @@ export async function thumbnail(request: Request, env: Env): Promise<Response> {
   const id = parts[parts.indexOf('files') + 1];
   if (!id) return error('File ID required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-  if (!raw) return error('File not found', 404);
-  const meta: FileMeta = JSON.parse(raw);
+  const meta = await getFileById(env, id);
+  if (!meta) return error('File not found', 404);
 
   if (!meta.type.startsWith('image/')) return error('Not an image', 400);
 
@@ -520,16 +556,14 @@ export async function thumbnail(request: Request, env: Env): Promise<Response> {
   return new Response(object.body, { headers });
 }
 
-// ─── Inline Preview (admin) ───────────────────────────────────────────
 export async function preview(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const parts = url.pathname.split('/');
   const id = parts[parts.indexOf('files') + 1];
   if (!id) return error('File ID required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-  if (!raw) return error('File not found', 404);
-  const meta: FileMeta = JSON.parse(raw);
+  const meta = await getFileById(env, id);
+  if (!meta) return error('File not found', 404);
 
   const rangeHeader = request.headers.get('Range');
 
@@ -566,24 +600,19 @@ export async function preview(request: Request, env: Env): Promise<Response> {
   return new Response(object.body, { headers });
 }
 
-// ─── Zip Download (multiple files) ────────────────────────────────────
 export async function zipDownload(request: Request, env: Env): Promise<Response> {
   const body = await request.json<{ ids: string[] }>();
   if (!body.ids?.length) return error('No file IDs provided', 400);
   if (body.ids.length > 100) return error('Max 100 files per zip', 400);
 
-  // Collect file metadata
   const fileMetas: FileMeta[] = [];
   for (const id of body.ids) {
-    const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-    if (raw) {
-      try { fileMetas.push(JSON.parse(raw)); } catch { /* skip */ }
-    }
+    const meta = await getFileById(env, id);
+    if (meta) fileMetas.push(meta);
   }
 
   if (fileMetas.length === 0) return error('No valid files found', 404);
 
-  // For single file, just redirect to download
   if (fileMetas.length === 1) {
     const meta = fileMetas[0];
     const object = await env.VAULT_BUCKET.get(meta.key);
@@ -595,12 +624,21 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
     return new Response(object.body, { headers });
   }
 
-  // Build a simple uncompressed zip using Uint8Arrays
-  // We stream a minimal zip format (store method, no compression)
   const encoder = new TextEncoder();
   const parts: Uint8Array[] = [];
   const centralDir: Uint8Array[] = [];
   let offset = 0;
+
+  function crc32(data: Uint8Array): number {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < data.length; i++) {
+      crc ^= data[i];
+      for (let j = 0; j < 8; j++) {
+        crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
+      }
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
 
   for (const meta of fileMetas) {
     const object = await env.VAULT_BUCKET.get(meta.key);
@@ -610,42 +648,40 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
     const fileName = encoder.encode(meta.name);
     const crc = crc32(fileData);
 
-    // Local file header (30 + nameLen bytes)
     const localHeader = new Uint8Array(30 + fileName.length);
     const lv = new DataView(localHeader.buffer);
-    lv.setUint32(0, 0x04034b50, true);  // signature
-    lv.setUint16(4, 20, true);           // version needed
-    lv.setUint16(6, 0, true);            // flags
-    lv.setUint16(8, 0, true);            // compression (store)
-    lv.setUint16(10, 0, true);           // mod time
-    lv.setUint16(12, 0, true);           // mod date
-    lv.setUint32(14, crc, true);         // crc-32
-    lv.setUint32(18, fileData.length, true); // compressed size
-    lv.setUint32(22, fileData.length, true); // uncompressed size
-    lv.setUint16(26, fileName.length, true); // file name length
-    lv.setUint16(28, 0, true);           // extra field length
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);
+    lv.setUint16(6, 0, true);
+    lv.setUint16(8, 0, true);
+    lv.setUint16(10, 0, true);
+    lv.setUint16(12, 0, true);
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, fileData.length, true);
+    lv.setUint32(22, fileData.length, true);
+    lv.setUint16(26, fileName.length, true);
+    lv.setUint16(28, 0, true);
     localHeader.set(fileName, 30);
 
-    // Central directory entry
     const cdEntry = new Uint8Array(46 + fileName.length);
     const cv = new DataView(cdEntry.buffer);
-    cv.setUint32(0, 0x02014b50, true);   // signature
-    cv.setUint16(4, 20, true);           // version made by
-    cv.setUint16(6, 20, true);           // version needed
-    cv.setUint16(8, 0, true);            // flags
-    cv.setUint16(10, 0, true);           // compression
-    cv.setUint16(12, 0, true);           // mod time
-    cv.setUint16(14, 0, true);           // mod date
-    cv.setUint32(16, crc, true);         // crc-32
-    cv.setUint32(20, fileData.length, true); // compressed size
-    cv.setUint32(24, fileData.length, true); // uncompressed size
-    cv.setUint16(28, fileName.length, true); // file name length
-    cv.setUint16(30, 0, true);           // extra length
-    cv.setUint16(32, 0, true);           // comment length
-    cv.setUint16(34, 0, true);           // disk number start
-    cv.setUint16(36, 0, true);           // internal attributes
-    cv.setUint32(38, 0, true);           // external attributes
-    cv.setUint32(42, offset, true);      // relative offset
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true);
+    cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0, true);
+    cv.setUint16(10, 0, true);
+    cv.setUint16(12, 0, true);
+    cv.setUint16(14, 0, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, fileData.length, true);
+    cv.setUint32(24, fileData.length, true);
+    cv.setUint16(28, fileName.length, true);
+    cv.setUint16(30, 0, true);
+    cv.setUint16(32, 0, true);
+    cv.setUint16(34, 0, true);
+    cv.setUint16(36, 0, true);
+    cv.setUint32(38, 0, true);
+    cv.setUint32(42, offset, true);
     cdEntry.set(fileName, 46);
 
     parts.push(localHeader);
@@ -654,21 +690,19 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
     offset += localHeader.length + fileData.length;
   }
 
-  // End of central directory
   let cdSize = 0;
   for (const cd of centralDir) cdSize += cd.length;
   const eocd = new Uint8Array(22);
   const ev = new DataView(eocd.buffer);
-  ev.setUint32(0, 0x06054b50, true);     // signature
-  ev.setUint16(4, 0, true);              // disk number
-  ev.setUint16(6, 0, true);              // disk with cd
-  ev.setUint16(8, centralDir.length, true); // entries on disk
-  ev.setUint16(10, centralDir.length, true); // total entries
-  ev.setUint32(12, cdSize, true);         // cd size
-  ev.setUint32(16, offset, true);         // cd offset
-  ev.setUint16(20, 0, true);             // comment length
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(4, 0, true);
+  ev.setUint16(6, 0, true);
+  ev.setUint16(8, centralDir.length, true);
+  ev.setUint16(10, centralDir.length, true);
+  ev.setUint32(12, cdSize, true);
+  ev.setUint32(16, offset, true);
+  ev.setUint16(20, 0, true);
 
-  // Combine all parts
   let totalSize = offset + cdSize + 22;
   const zipBuffer = new Uint8Array(totalSize);
   let pos = 0;
@@ -684,16 +718,4 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
       'Content-Length': String(totalSize),
     },
   });
-}
-
-// ─── CRC-32 for zip ───────────────────────────────────────────────────
-function crc32(data: Uint8Array): number {
-  let crc = 0xFFFFFFFF;
-  for (let i = 0; i < data.length; i++) {
-    crc ^= data[i];
-    for (let j = 0; j < 8; j++) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
-    }
-  }
-  return (crc ^ 0xFFFFFFFF) >>> 0;
 }
