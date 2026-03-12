@@ -85,7 +85,7 @@
       </div>
     </aside>
 
-    <!-- 主内容区域（保持不变） -->
+    <!-- 主内容区域 -->
     <main class="flex-1 flex flex-col min-w-0">
       <!-- 操作栏 -->
       <div class="flex flex-wrap items-center gap-2 p-3 border-b" style="border-color:var(--border)">
@@ -108,7 +108,6 @@
 
           <div class="relative" x-data="{ open: false }">
             <button @click="open = !open" class="btn-secondary text-xs flex items-center gap-1.5">
-              <!-- 移动端显示 SVG 图标，桌面端显示文字 + 图标（文字通过 sm:inline 控制） -->
               <span x-show="typeFilter === 'all'" class="inline-flex items-center"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg></span>
               <span x-show="typeFilter === 'images'" class="inline-flex items-center"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg></span>
               <span x-show="typeFilter === 'videos'" class="inline-flex items-center"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.91 11.672a.375.375 0 010 .656l-5.603 3.113a.375.375 0 01-.557-.328V8.887c0-.286.307-.466.557-.327l5.603 3.112z"/></svg></span>
@@ -123,7 +122,6 @@
             <div x-show="open" @click.away="open = false" x-transition class="type-dropdown">
               <template x-for="opt in [{v:'all',l:'所有类型'},{v:'images',l:'图片'},{v:'videos',l:'视频'},{v:'audio',l:'音频'},{v:'documents',l:'文档'},{v:'archives',l:'压缩包'},{v:'code',l:'代码'},{v:'other',l:'其他'}]">
                 <button @click="typeFilter = opt.v; open = false" class="type-dropdown-item" :class="{'active': typeFilter === opt.v}">
-                  <!-- 使用 SVG 图标替换圆点 -->
                   <span x-show="opt.v === 'all'" class="inline-flex items-center"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg></span>
                   <span x-show="opt.v === 'images'" class="inline-flex items-center"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg></span>
                   <span x-show="opt.v === 'videos'" class="inline-flex items-center"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.91 11.672a.375.375 0 010 .656l-5.603 3.113a.375.375 0 01-.557-.328V8.887c0-.286.307-.466.557-.327l5.603 3.112z"/></svg></span>
@@ -175,8 +173,8 @@
           <svg class="spinner w-8 h-8 text-accent-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
         </div>
 
-        <!-- 空状态 -->
-        <div x-show="!loading && filteredFiles.length === 0" class="empty-state">
+        <!-- 空状态（当没有文件和文件夹时显示） -->
+        <div x-show="!loading && currentSubfolders.length === 0 && filteredFiles.length === 0" class="empty-state">
           <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color:var(--text-muted)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/></svg>
           <p class="text-lg font-medium mb-1">暂无文件</p>
           <p class="text-sm">拖放文件至此处或点击上传开始</p>
@@ -184,6 +182,19 @@
 
         <!-- 网格视图 -->
         <div x-show="!loading && view === 'grid'" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+          <!-- 文件夹项 -->
+          <template x-for="folderName in currentSubfolders" :key="folderName">
+            <div class="file-card p-3" @click="navigateFolder(currentFolder === 'root' ? folderName : currentFolder + '/' + folderName)" @contextmenu.prevent="openFolderContextMenu($event, folderName)">
+              <div class="w-full aspect-square rounded-lg flex items-center justify-center mb-2 overflow-hidden" style="background:var(--bg-tertiary)">
+                <span class="text-3xl">📁</span>
+              </div>
+              <p class="text-xs font-medium truncate" x-text="folderName" :title="folderName"></p>
+              <div class="flex items-center justify-between mt-1">
+                <span class="text-xs" style="color:var(--text-muted)">文件夹</span>
+              </div>
+            </div>
+          </template>
+          <!-- 文件项 -->
           <template x-for="file in filteredFiles" :key="file.id">
             <div class="file-card p-3" :class="{'selected': selectedFiles.has(file.id), 'selection-mode': selectedFiles.size > 0}"
               @click="selectFile(file.id, $event)" @dblclick="previewFile(file)" @contextmenu.prevent="openContextMenu($event, file)">
@@ -227,6 +238,32 @@
               </tr>
             </thead>
             <tbody>
+              <!-- 文件夹行 -->
+              <template x-for="folderName in currentSubfolders" :key="folderName">
+                <tr class="file-row cursor-pointer" @click="navigateFolder(currentFolder === 'root' ? folderName : currentFolder + '/' + folderName)" @contextmenu.prevent="openFolderContextMenu($event, folderName)">
+                  <td class="py-2 px-3"><input type="checkbox" disabled></td>
+                  <td class="py-2 px-3">
+                    <div class="flex items-center gap-2">
+                      <span>📁</span>
+                      <div class="min-w-0">
+                        <span class="truncate block" x-text="folderName"></span>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="py-2 px-3 hidden sm:table-cell"><span class="type-pill type-pill-other">文件夹</span></td>
+                  <td class="py-2 px-3 hidden sm:table-cell" style="color:var(--text-muted)">—</td>
+                  <td class="py-2 px-3 hidden md:table-cell" style="color:var(--text-muted)">—</td>
+                  <td class="py-2 px-3 hidden lg:table-cell">
+                    <span x-show="getFolderShareStatus(folderName).shared" class="badge badge-shared cursor-pointer" @click.stop="shareFolder(getFolderObject(folderName))">📁 分享</span>
+                  </td>
+                  <td class="py-2 px-3">
+                    <button @click.stop="openFolderContextMenu($event, folderName)" class="p-1 rounded" style="color:var(--text-muted)">
+                      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z"/></svg>
+                    </button>
+                  </td>
+                </tr>
+              </template>
+              <!-- 文件行 -->
               <template x-for="file in filteredFiles" :key="file.id">
                 <tr class="file-row" :class="{'selected': selectedFiles.has(file.id)}" @click="selectFile(file.id, $event)" @contextmenu.prevent="openContextMenu($event, file)">
                   <td class="py-2 px-3"><input type="checkbox" :checked="selectedFiles.has(file.id)" @click.stop="toggleSelect(file.id)"></td>

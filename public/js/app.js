@@ -34,6 +34,21 @@ function cloudvault() {
     lightbox: { show: false, images: [], currentIndex: 0 },
     folderShareLinkModal: { show: false, folder: '', token: null, password: '', expiresInDays: 0, hasPassword: false, expiresAt: null },
 
+    // 新增：获取当前文件夹的直接子文件夹名称数组
+    get currentSubfolders() {
+      if (this.currentFolder === 'root') {
+        // 根目录下的子文件夹：路径中不含 '/' 的文件夹
+        return this.folders
+          .filter(f => !f.name.includes('/'))
+          .map(f => f.name);
+      } else {
+        const prefix = this.currentFolder + '/';
+        return this.folders
+          .filter(f => f.name.startsWith(prefix) && !f.name.slice(prefix.length).includes('/'))
+          .map(f => f.name.slice(prefix.length));
+      }
+    },
+
     async init() {
       if (localStorage.getItem('cv-dark') === 'false') {
         this.darkMode = false;
@@ -208,6 +223,30 @@ function cloudvault() {
         if (f && f.directlyShared && !f.excluded) return true;
       }
       return false;
+    },
+
+    // 新增：根据短文件夹名获取完整的文件夹对象
+    getFolderObject(shortName) {
+      const fullPath = this.currentFolder === 'root' ? shortName : this.currentFolder + '/' + shortName;
+      return this.folders.find(f => f.name === fullPath) || { name: fullPath, shared: false, directlyShared: false, excluded: false };
+    },
+
+    // 新增：获取文件夹的分享状态（用于列表视图显示徽章）
+    getFolderShareStatus(shortName) {
+      const folder = this.getFolderObject(shortName);
+      return { shared: folder.shared, directlyShared: folder.directlyShared, excluded: folder.excluded };
+    },
+
+    // 新增：打开文件夹右键菜单
+    openFolderContextMenu(event, shortName) {
+      const folder = this.getFolderObject(shortName);
+      if (!folder) return;
+      const rect = document.body.getBoundingClientRect();
+      let x = event.clientX;
+      let y = event.clientY;
+      if (x + 200 > window.innerWidth) x = window.innerWidth - 200;
+      if (y + 200 > window.innerHeight) y = window.innerHeight - 200;
+      this.folderCtxMenu = { show: true, x, y, folder };
     },
 
     async toggleFolderShare(folder) {
