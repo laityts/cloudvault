@@ -10,12 +10,24 @@ CREATE TABLE IF NOT EXISTS files (
   share_token TEXT UNIQUE,
   share_password TEXT,
   share_expires_at TEXT,
-  downloads INTEGER DEFAULT 0
+  downloads INTEGER DEFAULT 0,
+  -- 新增字段：用于分块上传和断点续传
+  upload_id TEXT,                    -- multipart upload ID
+  upload_chunks TEXT,                -- 已上传的分块信息（JSON格式）
+  upload_status TEXT DEFAULT 'pending', -- pending, uploading, paused, done, error
+  upload_created_at TEXT,            -- 上传任务创建时间
+  upload_updated_at TEXT,            -- 上传任务最后更新时间
+  upload_total_chunks INTEGER,       -- 总分块数
+  upload_completed_chunks INTEGER DEFAULT 0, -- 已完成分块数
+  upload_retry_count INTEGER DEFAULT 0, -- 重试次数
+  upload_error TEXT                   -- 错误信息
 );
 
 CREATE INDEX idx_files_folder ON files(folder);
 CREATE INDEX idx_files_share_token ON files(share_token);
 CREATE INDEX idx_files_uploaded_at ON files(uploaded_at);
+CREATE INDEX idx_files_upload_status ON files(upload_status); -- 新增索引
+CREATE INDEX idx_files_upload_id ON files(upload_id);         -- 新增索引
 
 -- 文件夹表
 CREATE TABLE IF NOT EXISTS folders (

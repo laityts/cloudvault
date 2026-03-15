@@ -2,6 +2,8 @@ import { Env, FileMeta } from '../utils/types';
 import { json, error, getMimeType } from '../utils/response';
 import { getSharedFolders, getExcludedFolders, isFolderShared } from './share';
 
+const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
+
 function extractId(url: URL): string | null {
   const parts = url.pathname.split('/');
   const idx = parts.indexOf('files');
@@ -10,42 +12,130 @@ function extractId(url: URL): string | null {
 
 async function getFileById(env: Env, id: string): Promise<FileMeta | null> {
   const row = await env.DB.prepare(
-    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files WHERE id = ?`
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+            share_token as shareToken, share_password as sharePassword, 
+            share_expires_at as shareExpiresAt, downloads,
+            upload_id as uploadId, upload_chunks as uploadChunks, 
+            upload_status as uploadStatus, upload_created_at as uploadCreatedAt,
+            upload_updated_at as uploadUpdatedAt, upload_total_chunks as uploadTotalChunks,
+            upload_completed_chunks as uploadCompletedChunks, upload_retry_count as uploadRetryCount,
+            upload_error as uploadError
+     FROM files WHERE id = ?`
   ).bind(id).first<{
     id: string; key: string; name: string; size: number; type: string; folder: string;
     uploadedAt: string; shareToken: string | null; sharePassword: string | null;
     shareExpiresAt: string | null; downloads: number;
+    uploadId: string | null; uploadChunks: string | null; uploadStatus: string | null;
+    uploadCreatedAt: string | null; uploadUpdatedAt: string | null;
+    uploadTotalChunks: number | null; uploadCompletedChunks: number | null;
+    uploadRetryCount: number | null; uploadError: string | null;
   }>();
   if (!row) return null;
+  
+  // 解析 uploadChunks JSON
+  let uploadChunks = null;
+  if (row.uploadChunks) {
+    try {
+      uploadChunks = JSON.parse(row.uploadChunks);
+    } catch (e) {
+      // 忽略解析错误
+    }
+  }
+  
   return {
     ...row,
     uploadedAt: row.uploadedAt,
     shareToken: row.shareToken,
     sharePassword: row.sharePassword,
     shareExpiresAt: row.shareExpiresAt,
+    uploadId: row.uploadId,
+    uploadChunks,
+    uploadStatus: row.uploadStatus,
+    uploadCreatedAt: row.uploadCreatedAt,
+    uploadUpdatedAt: row.uploadUpdatedAt,
+    uploadTotalChunks: row.uploadTotalChunks,
+    uploadCompletedChunks: row.uploadCompletedChunks,
+    uploadRetryCount: row.uploadRetryCount,
+    uploadError: row.uploadError,
   };
 }
 
 async function getFilesByFolder(env: Env, folder: string): Promise<FileMeta[]> {
   const rows = await env.DB.prepare(
-    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files WHERE folder = ?`
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+            share_token as shareToken, share_password as sharePassword, 
+            share_expires_at as shareExpiresAt, downloads,
+            upload_id as uploadId, upload_chunks as uploadChunks, 
+            upload_status as uploadStatus, upload_created_at as uploadCreatedAt,
+            upload_updated_at as uploadUpdatedAt, upload_total_chunks as uploadTotalChunks,
+            upload_completed_chunks as uploadCompletedChunks, upload_retry_count as uploadRetryCount,
+            upload_error as uploadError
+     FROM files WHERE folder = ?`
   ).bind(folder).all();
-  return rows.results.map(r => ({
-    id: r.id, key: r.key, name: r.name, size: r.size, type: r.type, folder: r.folder,
-    uploadedAt: r.uploadedAt, shareToken: r.shareToken, sharePassword: r.sharePassword,
-    shareExpiresAt: r.shareExpiresAt, downloads: r.downloads,
-  }));
+  
+  return rows.results.map(r => {
+    let uploadChunks = null;
+    if (r.uploadChunks) {
+      try {
+        uploadChunks = JSON.parse(r.uploadChunks as string);
+      } catch (e) {}
+    }
+    return {
+      id: r.id as string, key: r.key as string, name: r.name as string, 
+      size: r.size as number, type: r.type as string, folder: r.folder as string,
+      uploadedAt: r.uploadedAt as string, shareToken: r.shareToken as string | null,
+      sharePassword: r.sharePassword as string | null, shareExpiresAt: r.shareExpiresAt as string | null,
+      downloads: r.downloads as number,
+      uploadId: r.uploadId as string | null,
+      uploadChunks,
+      uploadStatus: r.uploadStatus as string | null,
+      uploadCreatedAt: r.uploadCreatedAt as string | null,
+      uploadUpdatedAt: r.uploadUpdatedAt as string | null,
+      uploadTotalChunks: r.uploadTotalChunks as number | null,
+      uploadCompletedChunks: r.uploadCompletedChunks as number | null,
+      uploadRetryCount: r.uploadRetryCount as number | null,
+      uploadError: r.uploadError as string | null,
+    };
+  });
 }
 
 async function getAllFiles(env: Env): Promise<FileMeta[]> {
   const rows = await env.DB.prepare(
-    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files`
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+            share_token as shareToken, share_password as sharePassword, 
+            share_expires_at as shareExpiresAt, downloads,
+            upload_id as uploadId, upload_chunks as uploadChunks, 
+            upload_status as uploadStatus, upload_created_at as uploadCreatedAt,
+            upload_updated_at as uploadUpdatedAt, upload_total_chunks as uploadTotalChunks,
+            upload_completed_chunks as uploadCompletedChunks, upload_retry_count as uploadRetryCount,
+            upload_error as uploadError
+     FROM files`
   ).all();
-  return rows.results.map(r => ({
-    id: r.id, key: r.key, name: r.name, size: r.size, type: r.type, folder: r.folder,
-    uploadedAt: r.uploadedAt, shareToken: r.shareToken, sharePassword: r.sharePassword,
-    shareExpiresAt: r.shareExpiresAt, downloads: r.downloads,
-  }));
+  
+  return rows.results.map(r => {
+    let uploadChunks = null;
+    if (r.uploadChunks) {
+      try {
+        uploadChunks = JSON.parse(r.uploadChunks as string);
+      } catch (e) {}
+    }
+    return {
+      id: r.id as string, key: r.key as string, name: r.name as string, 
+      size: r.size as number, type: r.type as string, folder: r.folder as string,
+      uploadedAt: r.uploadedAt as string, shareToken: r.shareToken as string | null,
+      sharePassword: r.sharePassword as string | null, shareExpiresAt: r.shareExpiresAt as string | null,
+      downloads: r.downloads as number,
+      uploadId: r.uploadId as string | null,
+      uploadChunks,
+      uploadStatus: r.uploadStatus as string | null,
+      uploadCreatedAt: r.uploadCreatedAt as string | null,
+      uploadUpdatedAt: r.uploadUpdatedAt as string | null,
+      uploadTotalChunks: r.uploadTotalChunks as number | null,
+      uploadCompletedChunks: r.uploadCompletedChunks as number | null,
+      uploadRetryCount: r.uploadRetryCount as number | null,
+      uploadError: r.uploadError as string | null,
+    };
+  });
 }
 
 async function updateStatsCounters(env: Env, sizeDelta: number, countDelta: number): Promise<void> {
@@ -67,6 +157,12 @@ export async function upload(request: Request, env: Env): Promise<Response> {
   }
   if (action === 'mpu-complete') {
     return handleMultipartComplete(request, env);
+  }
+  if (action === 'mpu-abort') {
+    return handleMultipartAbort(request, env);
+  }
+  if (action === 'mpu-progress') {
+    return handleMultipartProgress(request, env);
   }
 
   return handleDirectUpload(request, env);
@@ -105,14 +201,30 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
     sharePassword: null,
     shareExpiresAt: null,
     downloads: 0,
+    uploadId: null,
+    uploadChunks: null,
+    uploadStatus: 'done',
+    uploadCreatedAt: null,
+    uploadUpdatedAt: null,
+    uploadTotalChunks: null,
+    uploadCompletedChunks: null,
+    uploadRetryCount: null,
+    uploadError: null,
   };
 
   await env.DB.prepare(
-    `INSERT INTO files (id, key, name, size, type, folder, uploaded_at, share_token, share_password, share_expires_at, downloads)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO files (
+      id, key, name, size, type, folder, uploaded_at, 
+      share_token, share_password, share_expires_at, downloads,
+      upload_id, upload_chunks, upload_status, upload_created_at, upload_updated_at,
+      upload_total_chunks, upload_completed_chunks, upload_retry_count, upload_error
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     meta.id, meta.key, meta.name, meta.size, meta.type, meta.folder, meta.uploadedAt,
-    meta.shareToken, meta.sharePassword, meta.shareExpiresAt, meta.downloads
+    meta.shareToken, meta.sharePassword, meta.shareExpiresAt, meta.downloads,
+    meta.uploadId, meta.uploadChunks ? JSON.stringify(meta.uploadChunks) : null, 
+    meta.uploadStatus, meta.uploadCreatedAt, meta.uploadUpdatedAt,
+    meta.uploadTotalChunks, meta.uploadCompletedChunks, meta.uploadRetryCount, meta.uploadError
   ).run();
 
   await updateStatsCounters(env, meta.size, 1);
@@ -124,6 +236,7 @@ async function handleMultipartCreate(request: Request, env: Env): Promise<Respon
   const fileName = decodeURIComponent(request.headers.get('X-File-Name') || 'untitled');
   const folder = decodeURIComponent(request.headers.get('X-Folder') || 'root');
   const contentType = request.headers.get('Content-Type') || getMimeType(fileName);
+  const fileSize = parseInt(request.headers.get('X-File-Size') || '0', 10);
   const key = folder === 'root' ? fileName : folder + '/' + fileName;
 
   const multipart = await env.VAULT_BUCKET.createMultipartUpload(key, {
@@ -133,7 +246,26 @@ async function handleMultipartCreate(request: Request, env: Env): Promise<Respon
     },
   });
 
-  return json({ uploadId: multipart.uploadId, key });
+  // 创建临时记录
+  const id = crypto.randomUUID();
+  const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
+  const now = new Date().toISOString();
+  
+  await env.DB.prepare(
+    `INSERT INTO files (
+      id, key, name, size, type, folder, uploaded_at, 
+      share_token, share_password, share_expires_at, downloads,
+      upload_id, upload_chunks, upload_status, upload_created_at, upload_updated_at,
+      upload_total_chunks, upload_completed_chunks, upload_retry_count, upload_error
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    id, key, fileName, fileSize, contentType, folder, now,
+    null, null, null, 0,
+    multipart.uploadId, null, 'uploading', now, now,
+    totalChunks, 0, 0, null
+  ).run();
+
+  return json({ uploadId: multipart.uploadId, key, fileId: id });
 }
 
 async function handleMultipartUpload(request: Request, env: Env, url: URL): Promise<Response> {
@@ -154,6 +286,7 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
     uploadId: string;
     key: string;
     parts: { partNumber: number; etag: string }[];
+    fileId: string;
   }>();
 
   const multipart = env.VAULT_BUCKET.resumeMultipartUpload(body.key, body.uploadId);
@@ -161,33 +294,75 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
 
   const fileName = body.key.split('/').pop() || body.key;
   const folder = body.key.includes('/') ? body.key.substring(0, body.key.lastIndexOf('/')) : 'root';
-  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
 
-  const meta: FileMeta = {
-    id,
-    key: body.key,
-    name: fileName,
-    size: r2Object.size,
-    type: r2Object.httpMetadata?.contentType || getMimeType(fileName),
-    folder,
-    uploadedAt: new Date().toISOString(),
-    shareToken: null,
-    sharePassword: null,
-    shareExpiresAt: null,
-    downloads: 0,
-  };
-
+  // 更新文件记录为完成状态
   await env.DB.prepare(
-    `INSERT INTO files (id, key, name, size, type, folder, uploaded_at, share_token, share_password, share_expires_at, downloads)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    meta.id, meta.key, meta.name, meta.size, meta.type, meta.folder, meta.uploadedAt,
-    meta.shareToken, meta.sharePassword, meta.shareExpiresAt, meta.downloads
-  ).run();
+    `UPDATE files SET 
+      size = ?, 
+      uploaded_at = ?,
+      upload_id = NULL,
+      upload_chunks = NULL,
+      upload_status = 'done',
+      upload_updated_at = ?
+     WHERE id = ?`
+  ).bind(r2Object.size, now, now, body.fileId).run();
+
+  // 获取完整的文件记录返回
+  const meta = await getFileById(env, body.fileId);
+  if (!meta) return error('File not found', 404);
 
   await updateStatsCounters(env, meta.size, 1);
 
   return json(meta, 201);
+}
+
+async function handleMultipartAbort(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const uploadId = url.searchParams.get('uploadId');
+  const key = url.searchParams.get('key');
+  const fileId = url.searchParams.get('fileId');
+  
+  if (!uploadId || !key) return error('Missing uploadId or key', 400);
+
+  try {
+    const multipart = env.VAULT_BUCKET.resumeMultipartUpload(key, uploadId);
+    await multipart.abort();
+  } catch (e) {
+    // 忽略 abort 错误
+  }
+
+  // 如果提供了 fileId，删除临时记录
+  if (fileId) {
+    await env.DB.prepare(`DELETE FROM files WHERE id = ?`).bind(fileId).run();
+  }
+
+  return json({ message: 'Upload aborted' });
+}
+
+async function handleMultipartProgress(request: Request, env: Env): Promise<Response> {
+  const body = await request.json<{
+    fileId: string;
+    uploadId: string;
+    completedChunks: number;
+    chunks: { partNumber: number; etag: string }[];
+  }>();
+
+  await env.DB.prepare(
+    `UPDATE files SET 
+      upload_completed_chunks = ?,
+      upload_chunks = ?,
+      upload_updated_at = ?
+     WHERE id = ? AND upload_id = ?`
+  ).bind(
+    body.completedChunks,
+    JSON.stringify(body.chunks),
+    new Date().toISOString(),
+    body.fileId,
+    body.uploadId
+  ).run();
+
+  return json({ success: true });
 }
 
 export async function list(request: Request, env: Env): Promise<Response> {
@@ -195,22 +370,26 @@ export async function list(request: Request, env: Env): Promise<Response> {
   const folderFilter = url.searchParams.get('folder');
   const searchFilter = url.searchParams.get('search')?.toLowerCase();
 
-  let query = `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files`;
-  const conditions: string[] = [];
+  // 基础查询：只返回已完成的上传（upload_status = 'done' 或 upload_status IS NULL）
+  let query = `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+                      share_token as shareToken, share_password as sharePassword, 
+                      share_expires_at as shareExpiresAt, downloads
+               FROM files 
+               WHERE (upload_status = 'done' OR upload_status IS NULL)`;
   const params: any[] = [];
 
   if (folderFilter) {
-    conditions.push(`folder = ?`);
+    // 如果指定了文件夹，就只查询该文件夹下的文件
+    query += ` AND folder = ?`;
     params.push(folderFilter);
   } else if (!searchFilter) {
-    conditions.push(`folder = 'root'`);
+    // 如果没有指定文件夹且没有搜索关键词，则默认只显示根目录下的文件
+    query += ` AND folder = 'root'`;
   }
+  // 注意：如果有搜索关键词，我们不限制文件夹，以便在所有文件夹中搜索
   if (searchFilter) {
-    conditions.push(`LOWER(name) LIKE ?`);
+    query += ` AND LOWER(name) LIKE ?`;
     params.push(`%${searchFilter}%`);
-  }
-  if (conditions.length) {
-    query += ` WHERE ` + conditions.join(' AND ');
   }
   query += ` ORDER BY uploaded_at DESC`;
 
@@ -280,7 +459,6 @@ export async function deleteFiles(request: Request, env: Env): Promise<Response>
     await env.VAULT_BUCKET.delete(meta.key);
     await env.DB.prepare(`DELETE FROM files WHERE id = ?`).bind(id).run();
 
-    // 分享token在文件表中，删除文件即失效
     totalSizeRemoved += meta.size;
   }
 
@@ -358,7 +536,7 @@ export async function deleteFolder(request: Request, env: Env): Promise<Response
 
   // 删除包含的文件
   const filesToDelete = await env.DB.prepare(
-    `SELECT id, key, size FROM files WHERE folder = ? OR folder LIKE ?`
+    `SELECT id, key, size FROM files WHERE folder = ? OR folder LIKE ? AND (upload_status = 'done' OR upload_status IS NULL)`
   ).bind(folder, folder + '/%').all();
   let totalSizeRemoved = 0;
   let deletedCount = 0;
@@ -368,6 +546,11 @@ export async function deleteFolder(request: Request, env: Env): Promise<Response
     totalSizeRemoved += row.size as number;
     deletedCount++;
   }
+
+  // 删除未完成的临时文件记录
+  await env.DB.prepare(
+    `DELETE FROM files WHERE folder = ? OR folder LIKE ? AND upload_status != 'done'`
+  ).bind(folder, folder + '/%').run();
 
   if (deletedCount > 0) {
     await updateStatsCounters(env, -totalSizeRemoved, -deletedCount);
@@ -444,9 +627,9 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
       .bind(newSub, row.token, row.password_hash, row.expires_at).run();
   }
 
-  // 更新files表中的folder路径
+  // 更新files表中的folder路径（只更新已完成文件）
   const files = await env.DB.prepare(
-    `SELECT id, key, folder FROM files WHERE folder = ? OR folder LIKE ?`
+    `SELECT id, key, folder FROM files WHERE (folder = ? OR folder LIKE ?) AND (upload_status = 'done' OR upload_status IS NULL)`
   ).bind(oldName, oldName + '/%').all();
   for (const row of files.results) {
     const oldFolder = row.folder as string;
@@ -466,6 +649,14 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
       `UPDATE files SET folder = ?, key = ? WHERE id = ?`
     ).bind(newFolder, newKey, row.id).run();
   }
+
+  // 更新未完成的临时文件记录（只更新文件夹路径，不移动R2对象）
+  await env.DB.prepare(
+    `UPDATE files SET folder = ? WHERE folder = ? AND upload_status != 'done'`
+  ).bind(newName, oldName).run();
+  await env.DB.prepare(
+    `UPDATE files SET folder = ? || substr(folder, ?) WHERE folder LIKE ? AND upload_status != 'done'`
+  ).bind(newName, oldName.length + 1, oldName + '/%').run();
 
   return json({ folder: newName });
 }
@@ -513,6 +704,7 @@ export async function moveFiles(request: Request, env: Env): Promise<Response> {
     const meta = await getFileById(env, id);
     if (!meta) continue;
     if (meta.folder === targetFolder) continue;
+    if (meta.uploadStatus && meta.uploadStatus !== 'done') continue; // 不能移动未完成的文件
 
     const newKey = targetFolder === 'root' ? meta.name : targetFolder + '/' + meta.name;
 
@@ -608,7 +800,7 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
   const fileMetas: FileMeta[] = [];
   for (const id of body.ids) {
     const meta = await getFileById(env, id);
-    if (meta) fileMetas.push(meta);
+    if (meta && (!meta.uploadStatus || meta.uploadStatus === 'done')) fileMetas.push(meta);
   }
 
   if (fileMetas.length === 0) return error('No valid files found', 404);

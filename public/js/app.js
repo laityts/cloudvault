@@ -18,7 +18,7 @@ function cloudvault() {
     showNewFolderModal: false,
     newFolderName: '',
     loading: true,
-    uploads: [],
+    uploads: [], // 由 UploadManager 更新
     sidebarOpen: false,
     ctxMenu: { show: false, x: 0, y: 0, file: null },
     folderCtxMenu: { show: false, x: 0, y: 0, folder: null },
@@ -35,7 +35,7 @@ function cloudvault() {
     lightbox: { show: false, images: [], currentIndex: 0 },
     folderShareLinkModal: { show: false, folder: '', token: null, password: '', expiresInDays: 0, hasPassword: false, expiresAt: null },
 
-    // 新增：分享管理模态框数据
+    // 分享管理模态框数据
     sharesModal: {
       show: false,
       tab: 'files', // 'files' or 'folders'
@@ -95,23 +95,38 @@ function cloudvault() {
     },
 
     setupUploadEvents() {
-      window.addEventListener('upload-progress', () => {
-        this.uploads = [...window.UploadManager.queue.map(q => ({
-          name: q.file.name, progress: q.progress, status: q.status
-        }))];
-      });
-      window.addEventListener('upload-complete', async (e) => {
-        this.uploads = [...window.UploadManager.queue.map(q => ({
-          name: q.file.name, progress: q.progress, status: q.status
-        }))];
+      const updateUploads = () => {
+        this.uploads = window.UploadManager.queue.map(item => ({
+          id: item.id,
+          name: item.name,
+          progress: item.progress,
+          status: item.status,
+          speed: item.speed,
+          eta: item.eta,
+        }));
+      };
+
+      window.addEventListener('upload-progress', updateUploads);
+      window.addEventListener('upload-queue-changed', updateUploads);
+      window.addEventListener('upload-queue-loaded', updateUploads);
+      window.addEventListener('upload-complete', (e) => {
         this.showToast(e.detail.name + ' 上传成功', 'success');
-        await Promise.all([this.fetchFiles(), this.fetchStats(), this.fetchFolders()]);
+        updateUploads();
+        this.fetchFiles();
+        this.fetchStats();
+        this.fetchFolders();
       });
       window.addEventListener('upload-error', (e) => {
-        this.uploads = [...window.UploadManager.queue.map(q => ({
-          name: q.file.name, progress: q.progress, status: q.status
-        }))];
         this.showToast('上传 ' + e.detail.name + ' 失败', 'error');
+        updateUploads();
+      });
+      window.addEventListener('upload-retry', (e) => {
+        this.showToast(e.detail.name + ' 正在重试 (' + e.detail.retry + '/3)', 'info');
+        updateUploads();
+      });
+      window.addEventListener('upload-paused', (e) => {
+        this.showToast(e.detail.name + ' 已暂停', 'info');
+        updateUploads();
       });
     },
 
@@ -834,9 +849,6 @@ function cloudvault() {
       const files = event.target.files;
       if (files.length) {
         window.UploadManager.addFiles(files, this.currentFolder);
-        this.uploads = [...window.UploadManager.queue.map(q => ({
-          name: q.file.name, progress: q.progress, status: q.status
-        }))];
       }
       event.target.value = '';
     },
@@ -857,9 +869,6 @@ function cloudvault() {
       for (const [folder, files] of Object.entries(byFolder)) {
         window.UploadManager.addFiles(files, folder);
       }
-      this.uploads = [...window.UploadManager.queue.map(q => ({
-        name: q.file.name, progress: q.progress, status: q.status
-      }))];
     },
 
     toggleDarkMode() {
@@ -939,7 +948,7 @@ function cloudvault() {
         this.renameFolderModal.show = false;
         this.deleteFolderModal.show = false;
         this.folderShareLinkModal.show = false;
-        this.sharesModal.show = false; // 新增：关闭分享管理模态框
+        this.sharesModal.show = false;
       }
     },
 
@@ -956,7 +965,7 @@ function cloudvault() {
       }, 3000);
     },
 
-    // ========== 新增：分享管理相关方法 ==========
+    // ========== 分享管理相关方法 ==========
     openSharesModal() {
       this.sharesModal.show = true;
       this.sharesModal.tab = 'files';
@@ -1016,8 +1025,36 @@ function cloudvault() {
         this.showToast('撤销失败', 'error');
       }
     },
-    // ========== 结束：分享管理相关方法 ==========
 
+    // ========== 上传控制相关方法 ==========
+    pauseUpload(id) {
+      window.UploadManager.pauseUpload(id);
+    },
+    resumeUpload(id) {
+      window.UploadManager.resumeUpload(id);
+    },
+    cancelUpload(id) {
+      if (confirm('确定取消上传？')) {
+        window.UploadManager.cancelUpload(id);
+      }
+    },
+    retryUpload(id) {
+      window.UploadManager.retryFailed(id);
+    },
+    clearCompletedUploads() {
+      window.UploadManager.clearCompleted();
+    },
+    formatTime(seconds) {
+      if (seconds === Infinity || seconds === 0) return '剩余时间未知';
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+      if (h > 0) return `${h}小时${m}分`;
+      if (m > 0) return `${m}分${s}秒`;
+      return `${s}秒`;
+    },
+
+    // ========== 格式化方法 ==========
     formatBytes(bytes) {
       if (!bytes || bytes === 0) return '0 B';
       const k = 1024;
