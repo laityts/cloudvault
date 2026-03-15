@@ -48,6 +48,14 @@
           <span>&middot;</span>
           <span x-text="formatBytes(stats.totalSize)"></span>
         </div>
+
+        <!-- 新增：分享管理按钮 -->
+        <button @click="openSharesModal()" class="p-2 rounded-lg transition-colors" style="color:var(--text-muted)" title="分享管理">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z" />
+          </svg>
+        </button>
+
         <button @click="toggleDarkMode()" class="p-2 rounded-lg transition-colors" style="color:var(--text-muted)" :style="'&:hover{background:var(--bg-hover)}'">
           <svg x-show="darkMode" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z"/></svg>
           <svg x-show="!darkMode" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z"/></svg>
@@ -89,7 +97,7 @@
     <main class="flex-1 flex flex-col min-w-0">
       <!-- 操作栏 -->
       <div class="flex flex-wrap items-center gap-2 p-3 border-b" style="border-color:var(--border)">
-        <!-- 面包屑 - 修改点：在“首页”链接前添加房子图标 -->
+        <!-- 面包屑 -->
         <div class="breadcrumb flex items-center gap-1 text-sm mr-auto flex-wrap">
           <a href="#" @click.prevent="navigateFolder('root')" class="flex items-center gap-1">
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.25 12l8.954-8.955a1.126 1.126 0 011.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"/></svg>
@@ -653,6 +661,86 @@
       </template>
     </div>
   </div>
+
+  <!-- ========== 新增：分享管理模态框 ========== -->
+  <div x-show="sharesModal.show" x-transition class="modal-backdrop" @click.self="sharesModal.show = false">
+    <div class="modal-content" style="max-width: 800px; width: 90%;">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold">分享管理</h3>
+        <button @click="sharesModal.show = false" class="p-1.5 rounded-lg hover:bg-gray-700">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- 选项卡 -->
+      <div class="flex border-b mb-4" style="border-color:var(--border)">
+        <button class="px-4 py-2 text-sm font-medium" :class="sharesModal.tab === 'files' ? 'text-accent-400 border-b-2 border-accent-400' : ''" @click="sharesModal.tab = 'files'">文件分享</button>
+        <button class="px-4 py-2 text-sm font-medium" :class="sharesModal.tab === 'folders' ? 'text-accent-400 border-b-2 border-accent-400' : ''" @click="sharesModal.tab = 'folders'">文件夹分享</button>
+      </div>
+
+      <!-- 加载中 -->
+      <div x-show="sharesModal.loading" class="py-8 text-center">
+        <svg class="spinner w-6 h-6 mx-auto text-accent-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+      </div>
+
+      <!-- 文件分享列表 -->
+      <div x-show="!sharesModal.loading && sharesModal.tab === 'files'" class="max-h-96 overflow-y-auto">
+        <template x-if="sharesModal.files.length === 0">
+          <p class="text-sm text-center py-8" style="color:var(--text-muted)">暂无文件分享链接</p>
+        </template>
+        <template x-for="share in sharesModal.files" :key="share.id">
+          <div class="flex items-center gap-3 p-3 border-b last:border-b-0" style="border-color:var(--border)">
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate" x-text="share.name"></p>
+              <p class="text-xs" style="color:var(--text-muted)" x-text="'位置：' + (share.folder === 'root' ? '/' : share.folder)"></p>
+              <div class="flex items-center gap-2 mt-1 text-xs" style="color:var(--text-muted)">
+                <span x-show="share.hasPassword">🔒 密码保护</span>
+                <span x-show="share.expiresAt" x-text="'过期：' + new Date(share.expiresAt).toLocaleString()"></span>
+                <span x-text="share.downloads + ' 次下载'"></span>
+              </div>
+            </div>
+            <div class="flex items-center gap-1">
+              <button @click="copyShareLink(share.shareToken)" class="p-1.5 rounded hover:bg-gray-700" title="复制链接">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.857-9.858a4.5 4.5 0 00-6.364 0l-4.5 4.5a4.5 4.5 0 006.364 6.364l1.757-1.757"/></svg>
+              </button>
+              <button @click="revokeFileShare(share.id)" class="p-1.5 rounded hover:bg-red-900/20 text-red-400" title="撤销链接">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+              </button>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- 文件夹分享列表 -->
+      <div x-show="!sharesModal.loading && sharesModal.tab === 'folders'" class="max-h-96 overflow-y-auto">
+        <template x-if="sharesModal.folders.length === 0">
+          <p class="text-sm text-center py-8" style="color:var(--text-muted)">暂无文件夹分享链接</p>
+        </template>
+        <template x-for="share in sharesModal.folders" :key="share.token">
+          <div class="flex items-center gap-3 p-3 border-b last:border-b-0" style="border-color:var(--border)">
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate" x-text="share.folder"></p>
+              <div class="flex items-center gap-2 mt-1 text-xs" style="color:var(--text-muted)">
+                <span x-show="share.hasPassword">🔒 密码保护</span>
+                <span x-show="share.expiresAt" x-text="'过期：' + new Date(share.expiresAt).toLocaleString()"></span>
+                <span x-text="'创建于：' + new Date(share.createdAt).toLocaleDateString()"></span>
+              </div>
+            </div>
+            <div class="flex items-center gap-1">
+              <button @click="copyShareLink(share.token)" class="p-1.5 rounded hover:bg-gray-700" title="复制链接">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.857-9.858a4.5 4.5 0 00-6.364 0l-4.5 4.5a4.5 4.5 0 006.364 6.364l1.757-1.757"/></svg>
+              </button>
+              <button @click="revokeFolderShare(share.folder)" class="p-1.5 rounded hover:bg-red-900/20 text-red-400" title="撤销链接">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+              </button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+  <!-- ========== 结束：分享管理模态框 ========== -->
+
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>

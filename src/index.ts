@@ -4,6 +4,7 @@ import { handleLogin, handleLogout, authMiddleware, validateSession } from './au
 import { getSettings } from './api/settings';
 import * as files from './api/files';
 import * as share from './api/share';
+import * as shares from './api/shares';   // 新增导入
 import * as stats from './api/stats';
 import * as settings from './api/settings';
 import * as download from './handlers/download';
@@ -229,6 +230,7 @@ async function handleApiRoutes(
   path: string,
   method: string,
 ): Promise<Response> {
+  // 文件相关路由
   if (path === '/api/files' && method === 'GET') {
     return files.list(request, env);
   }
@@ -268,6 +270,7 @@ async function handleApiRoutes(
     return files.zipDownload(request, env);
   }
 
+  // 文件夹相关路由
   if (path === '/api/folders' && method === 'GET') {
     return files.listFolders(request, env);
   }
@@ -293,6 +296,7 @@ async function handleApiRoutes(
     return files.moveFiles(request, env);
   }
 
+  // 分享相关路由
   if (path === '/api/share' && method === 'POST') {
     return share.createShare(request, env);
   }
@@ -303,6 +307,7 @@ async function handleApiRoutes(
     if (method === 'GET') return share.getShareInfo(request, env);
   }
 
+  // 文件夹分享链接路由
   if (path === '/api/folder-share-link' && method === 'POST') {
     return share.createFolderShareLink(request, env);
   }
@@ -313,6 +318,16 @@ async function handleApiRoutes(
     return share.getFolderShareLinkInfo(request, env);
   }
 
+  // ========== 新增：分享管理路由 ==========
+  if (path === '/api/shares/files' && method === 'GET') {
+    return shares.listFileShares(request, env);
+  }
+  if (path === '/api/shares/folders' && method === 'GET') {
+    return shares.listFolderShares(request, env);
+  }
+  // ========== 结束：分享管理路由 ==========
+
+  // 统计和设置路由
   if (path === '/api/stats' && method === 'GET') {
     return stats.getStats(request, env);
   }

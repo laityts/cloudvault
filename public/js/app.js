@@ -1,5 +1,6 @@
 function cloudvault() {
   return {
+    // 原有数据
     files: [],
     folders: [],
     expandedFolders: { '__root__': true },
@@ -34,7 +35,16 @@ function cloudvault() {
     lightbox: { show: false, images: [], currentIndex: 0 },
     folderShareLinkModal: { show: false, folder: '', token: null, password: '', expiresInDays: 0, hasPassword: false, expiresAt: null },
 
-    // 新增：获取当前文件夹的直接子文件夹名称数组
+    // 新增：分享管理模态框数据
+    sharesModal: {
+      show: false,
+      tab: 'files', // 'files' or 'folders'
+      files: [],
+      folders: [],
+      loading: false,
+    },
+
+    // 获取当前文件夹的直接子文件夹名称数组
     get currentSubfolders() {
       if (this.currentFolder === 'root') {
         // 根目录下的子文件夹：路径中不含 '/' 的文件夹
@@ -225,19 +235,19 @@ function cloudvault() {
       return false;
     },
 
-    // 新增：根据短文件夹名获取完整的文件夹对象
+    // 根据短文件夹名获取完整的文件夹对象
     getFolderObject(shortName) {
       const fullPath = this.currentFolder === 'root' ? shortName : this.currentFolder + '/' + shortName;
       return this.folders.find(f => f.name === fullPath) || { name: fullPath, shared: false, directlyShared: false, excluded: false };
     },
 
-    // 新增：获取文件夹的分享状态（用于列表视图显示徽章）
+    // 获取文件夹的分享状态（用于列表视图显示徽章）
     getFolderShareStatus(shortName) {
       const folder = this.getFolderObject(shortName);
       return { shared: folder.shared, directlyShared: folder.directlyShared, excluded: folder.excluded };
     },
 
-    // 新增：打开文件夹右键菜单
+    // 打开文件夹右键菜单
     openFolderContextMenu(event, shortName) {
       const folder = this.getFolderObject(shortName);
       if (!folder) return;
@@ -696,7 +706,23 @@ function cloudvault() {
 
     copyShareLink(token) {
       const url = window.location.origin + '/s/' + token;
-      navigator.clipboard.writeText(url).then(() => this.showToast('链接已复制到剪贴板', 'info'));
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(url).then(() => this.showToast('链接已复制到剪贴板', 'info'));
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = url;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+          document.execCommand('copy');
+          this.showToast('链接已复制到剪贴板', 'info');
+        } catch (e) {
+          this.showToast('复制失败，请手动复制', 'error');
+        }
+        document.body.removeChild(textarea);
+      }
     },
 
     downloadFile(file) {
@@ -913,6 +939,7 @@ function cloudvault() {
         this.renameFolderModal.show = false;
         this.deleteFolderModal.show = false;
         this.folderShareLinkModal.show = false;
+        this.sharesModal.show = false; // 新增：关闭分享管理模态框
       }
     },
 
@@ -928,6 +955,68 @@ function cloudvault() {
         setTimeout(() => toast.remove(), 200);
       }, 3000);
     },
+
+    // ========== 新增：分享管理相关方法 ==========
+    openSharesModal() {
+      this.sharesModal.show = true;
+      this.sharesModal.tab = 'files';
+      this.loadShares();
+    },
+
+    async loadShares() {
+      this.sharesModal.loading = true;
+      try {
+        const [filesRes, foldersRes] = await Promise.all([
+          this.apiFetch('/api/shares/files'),
+          this.apiFetch('/api/shares/folders')
+        ]);
+        if (filesRes && filesRes.ok) {
+          this.sharesModal.files = await filesRes.json();
+        }
+        if (foldersRes && foldersRes.ok) {
+          this.sharesModal.folders = await foldersRes.json();
+        }
+      } catch (e) {
+        this.showToast('加载分享列表失败', 'error');
+      } finally {
+        this.sharesModal.loading = false;
+      }
+    },
+
+    async revokeFileShare(fileId) {
+      if (!confirm('确定撤销此文件的分享链接？')) return;
+      try {
+        const res = await this.apiFetch('/api/share/' + fileId, { method: 'DELETE' });
+        if (res && res.ok) {
+          this.showToast('分享链接已撤销', 'success');
+          // 更新列表
+          this.sharesModal.files = this.sharesModal.files.filter(f => f.id !== fileId);
+          // 同时更新当前文件列表中的分享状态
+          const file = this.files.find(f => f.id === fileId);
+          if (file) file.shareToken = null;
+        } else {
+          this.showToast('撤销失败', 'error');
+        }
+      } catch {
+        this.showToast('撤销失败', 'error');
+      }
+    },
+
+    async revokeFolderShare(folder) {
+      if (!confirm('确定撤销此文件夹的分享链接？')) return;
+      try {
+        const res = await this.apiFetch('/api/folder-share-link/' + encodeURIComponent(folder), { method: 'DELETE' });
+        if (res && res.ok) {
+          this.showToast('文件夹分享链接已撤销', 'success');
+          this.sharesModal.folders = this.sharesModal.folders.filter(f => f.folder !== folder);
+        } else {
+          this.showToast('撤销失败', 'error');
+        }
+      } catch {
+        this.showToast('撤销失败', 'error');
+      }
+    },
+    // ========== 结束：分享管理相关方法 ==========
 
     formatBytes(bytes) {
       if (!bytes || bytes === 0) return '0 B';
