@@ -18,7 +18,7 @@ function cloudvault() {
     showNewFolderModal: false,
     newFolderName: '',
     loading: true,
-    uploads: [], // 由 UploadManager 更新
+    uploads: [], // 由 UploadManager 更新（悬浮面板用）
     sidebarOpen: false,
     ctxMenu: { show: false, x: 0, y: 0, file: null },
     folderCtxMenu: { show: false, x: 0, y: 0, folder: null },
@@ -43,6 +43,10 @@ function cloudvault() {
       folders: [],
       loading: false,
     },
+
+    // 新增：上传任务模态框数据
+    showUploadsModal: false,
+    allUploads: [], // 从 UploadManager 获取的完整任务列表
 
     // 获取当前文件夹的直接子文件夹名称数组
     get currentSubfolders() {
@@ -96,6 +100,7 @@ function cloudvault() {
 
     setupUploadEvents() {
       const updateUploads = () => {
+        // 更新悬浮面板的上传任务
         this.uploads = window.UploadManager.queue.map(item => ({
           id: item.id,
           name: item.name,
@@ -103,6 +108,19 @@ function cloudvault() {
           status: item.status,
           speed: item.speed,
           eta: item.eta,
+        }));
+        // 更新完整任务列表（用于模态框）
+        this.allUploads = window.UploadManager.getAllItems().map(item => ({
+          id: item.id,
+          name: item.name,
+          size: item.size,
+          progress: item.progress,
+          status: item.status,
+          speed: item.speed,
+          eta: item.eta,
+          retryCount: item.retryCount,
+          createdAt: item.createdAt,
+          folder: item.folder,
         }));
       };
 
@@ -949,6 +967,7 @@ function cloudvault() {
         this.deleteFolderModal.show = false;
         this.folderShareLinkModal.show = false;
         this.sharesModal.show = false;
+        this.showUploadsModal = false; // 新增：关闭上传任务模态框
       }
     },
 
@@ -1052,6 +1071,24 @@ function cloudvault() {
       if (h > 0) return `${h}小时${m}分`;
       if (m > 0) return `${m}分${s}秒`;
       return `${s}秒`;
+    },
+
+    // ========== 新增：打开上传任务模态框 ==========
+    openUploadsModal() {
+      this.showUploadsModal = true;
+      // 立即刷新数据
+      this.allUploads = window.UploadManager.getAllItems().map(item => ({
+        id: item.id,
+        name: item.name,
+        size: item.size,
+        progress: item.progress,
+        status: item.status,
+        speed: item.speed,
+        eta: item.eta,
+        retryCount: item.retryCount,
+        createdAt: item.createdAt,
+        folder: item.folder,
+      }));
     },
 
     // ========== 格式化方法 ==========
