@@ -1,6 +1,6 @@
 function cloudvault() {
   return {
-    // ... 原有数据 ...
+    // 原有数据
     files: [],
     folders: [],
     expandedFolders: { '__root__': true },
@@ -34,13 +34,20 @@ function cloudvault() {
     previewModal: { show: false, file: null, content: '', loading: false },
     lightbox: { show: false, images: [], currentIndex: 0 },
     folderShareLinkModal: { show: false, folder: '', token: null, password: '', expiresInDays: 0, hasPassword: false, expiresAt: null },
+
+    // 分页相关
     page: 1,
     limit: 50,
     hasMore: true,
     loadingMore: false,
+
+    // 缓存
     cache: {},
     cacheTTL: 5 * 60 * 1000,
+
+    // 文件信息模态框
     fileInfoModal: { show: false, file: null, info: null, loading: false },
+
     sharesModal: {
       show: false,
       tab: 'files',
@@ -48,8 +55,11 @@ function cloudvault() {
       folders: [],
       loading: false,
     },
+
     showUploadsModal: false,
     allUploads: [],
+
+    // 用于存储事件处理函数引用，以便移除
     _uploadEventHandlers: {},
     _uploadEventsBound: false,
 
@@ -83,8 +93,13 @@ function cloudvault() {
       }
 
       this.setupDragDrop();
-      this.setupUploadEvents();
+      this.setupUploadEvents(); // 会先检查标志，避免重复
       this.setupTreeEvents();
+
+      // 页面关闭/刷新时自动暂停所有上传中的任务
+      window.addEventListener('beforeunload', () => {
+        window.UploadManager.pauseAllUploadingOnUnload();
+      });
 
       await Promise.all([this.fetchFolders(), this.fetchStats()]);
       await this.fetchFiles(false);

@@ -20,7 +20,26 @@ class UploadManager {
   // 从存储恢复队列（保留所有任务，包括已完成）
   async loadFromStorage() {
     try {
-      const stored = await getAllUploads();
+      let stored = await getAllUploads();
+      
+      // 如果 IndexedDB 为空，尝试从 localStorage 恢复备份
+      if (stored.length === 0) {
+        const backup = localStorage.getItem('cv_upload_backup');
+        if (backup) {
+          try {
+            const parsed = JSON.parse(backup);
+            // 重新存入 IndexedDB
+            for (const item of parsed) {
+              await saveUpload(item);
+            }
+            stored = parsed; // 使用恢复的数据
+            localStorage.removeItem('cv_upload_backup'); // 清理备份
+          } catch (e) {
+            console.error('Failed to restore from localStorage backup', e);
+          }
+        }
+      }
+
       this.queue = stored.map(item => ({
         ...item,
         // 确保每个任务有必要的控制属性
@@ -32,10 +51,64 @@ class UploadManager {
         lastLoaded: 0,
         progressUpdateCounter: 0,
       }));
+      // 修复可能残留的 uploading 状态（例如上次未正常关闭）
+      this.reconcileUploadingState();
       window.dispatchEvent(new CustomEvent('upload-queue-loaded'));
       this.processQueue();
     } catch (e) {
       console.error('Failed to load uploads from storage', e);
+    }
+  }
+
+  // 修复页面加载后可能残留的 uploading 状态（例如上次未正常关闭）
+  reconcileUploadingState() {
+    let changed = false;
+    for (const item of this.queue) {
+      // 如果状态是 uploading 但没有活跃的 controller，说明实际已中断，改为 paused
+      if (item.status === 'uploading' && !item.controller) {
+        item.status = 'paused';
+        this.saveToStorage(item); // 异步保存
+        changed = true;
+      }
+    }
+    if (changed) {
+      window.dispatchEvent(new CustomEvent('upload-queue-changed'));
+    }
+  }
+
+  // 页面卸载时调用：暂停所有正在上传的任务，并保存状态
+  pauseAllUploadingOnUnload() {
+    const uploadingItems = this.queue.filter(item => item.status === 'uploading');
+    uploadingItems.forEach(item => {
+      // 同步修改状态
+      item.status = 'paused';
+      // 中止网络请求
+      if (item.controller) {
+        item.controller.abort();
+        item.controller = null;
+      }
+      // 尝试异步保存（可能无法完成，但尽量）
+      this.saveToStorage(item);
+    });
+    if (uploadingItems.length > 0) {
+      window.dispatchEvent(new CustomEvent('upload-queue-changed'));
+    }
+
+    // 额外备份：将整个队列序列化到 localStorage（同步操作）
+    try {
+      const backup = this.queue.map(item => {
+        // 移除不可序列化的字段
+        const copy = { ...item };
+        delete copy.controller;
+        delete copy.xhr;
+        delete copy.lastUpdate;
+        delete copy.lastLoaded;
+        delete copy.progressUpdateCounter;
+        return copy;
+      });
+      localStorage.setItem('cv_upload_backup', JSON.stringify(backup));
+    } catch (e) {
+      console.error('Failed to backup uploads to localStorage', e);
     }
   }
 
@@ -186,6 +259,8 @@ class UploadManager {
           item.uploadedBytes = loaded;
           item.progress = Math.round((loaded / item.size) * 100);
           this.updateSpeedAndETA(item, loaded);
+          // 节流保存状态（避免过于频繁）
+          this._debounceSave(item);
           window.dispatchEvent(new CustomEvent('upload-progress'));
         }
       };
@@ -292,6 +367,8 @@ class UploadManager {
               item.uploadedBytes += CHUNK_SIZE;
               item.progress = Math.round((item.chunks.length / totalParts) * 100);
               this.updateSpeedAndETA(item, item.uploadedBytes);
+              // 节流保存状态
+              this._debounceSave(item);
               window.dispatchEvent(new CustomEvent('upload-progress'));
               activeChunks--;
               next();
@@ -334,6 +411,15 @@ class UploadManager {
       item.chunks = [];
       await this.saveToStorage(item);
     });
+  }
+
+  // 节流保存（避免频繁写入 IndexedDB）
+  _debounceSave(item) {
+    if (item._saveTimeout) clearTimeout(item._saveTimeout);
+    item._saveTimeout = setTimeout(() => {
+      this.saveToStorage(item);
+      item._saveTimeout = null;
+    }, 1000); // 1秒内多次更新只保存一次
   }
 
   // 更新服务器进度
