@@ -444,6 +444,12 @@ class UploadManager {
     toPause.forEach(item => this.pauseUpload(item.id));
   }
 
+  // 恢复全部
+  resumeAllUploads() {
+    const toResume = this.queue.filter(item => item.status === 'paused');
+    toResume.forEach(item => this.resumeUpload(item.id));
+  }
+
   // 取消全部
   cancelAllUploads() {
     const toCancel = this.queue.filter(item => item.status !== 'done' && item.status !== 'cancelled');

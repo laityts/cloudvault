@@ -59,6 +59,9 @@ function cloudvault() {
     showUploadsModal: false,
     allUploads: [],
 
+    // 用于存储事件处理函数引用，以便移除
+    _uploadEventHandlers: {},
+
     get currentSubfolders() {
       if (this.currentFolder === 'root') {
         return this.folders
@@ -80,7 +83,7 @@ function cloudvault() {
       }
 
       this.setupDragDrop();
-      this.setupUploadEvents();
+      this.setupUploadEvents(); // 会先移除旧监听再添加
       this.setupTreeEvents();
 
       await Promise.all([this.fetchFolders(), this.fetchStats()]);
@@ -109,6 +112,7 @@ function cloudvault() {
     },
 
     setupUploadEvents() {
+      // 定义更新函数
       const updateUploads = () => {
         this.uploads = window.UploadManager.queue.map(item => ({
           id: item.id,
@@ -132,38 +136,65 @@ function cloudvault() {
         }));
       };
 
-      window.addEventListener('upload-progress', updateUploads);
-      window.addEventListener('upload-queue-changed', updateUploads);
-      window.addEventListener('upload-queue-loaded', updateUploads);
-      window.addEventListener('upload-complete', (e) => {
+      // 保存处理函数引用
+      this._uploadEventHandlers.updateUploads = updateUploads;
+
+      // 先移除可能存在的旧监听，避免重复
+      window.removeEventListener('upload-progress', this._uploadEventHandlers.updateUploads);
+      window.removeEventListener('upload-queue-changed', this._uploadEventHandlers.updateUploads);
+      window.removeEventListener('upload-queue-loaded', this._uploadEventHandlers.updateUploads);
+
+      // 定义带 toast 的事件处理函数并保存引用
+      const completeHandler = (e) => {
         this.showToast(e.detail.name + ' 上传成功', 'success');
         updateUploads();
-        // 清除当前文件夹的缓存并重新加载第一页
         this.clearCurrentFolderCache();
         this.fetchFiles(false);
         this.fetchStats();
         this.fetchFolders();
-      });
-      window.addEventListener('upload-error', (e) => {
+      };
+      const errorHandler = (e) => {
         this.showToast('上传 ' + e.detail.name + ' 失败', 'error');
         updateUploads();
-      });
-      window.addEventListener('upload-retry', (e) => {
+      };
+      const retryHandler = (e) => {
         this.showToast(e.detail.name + ' 正在重试 (' + e.detail.retry + '/3)', 'info');
         updateUploads();
-      });
-      window.addEventListener('upload-paused', (e) => {
+      };
+      const pausedHandler = (e) => {
         this.showToast(e.detail.name + ' 已暂停', 'info');
         updateUploads();
-      });
+      };
+
+      this._uploadEventHandlers.complete = completeHandler;
+      this._uploadEventHandlers.error = errorHandler;
+      this._uploadEventHandlers.retry = retryHandler;
+      this._uploadEventHandlers.paused = pausedHandler;
+
+      window.removeEventListener('upload-complete', this._uploadEventHandlers.complete);
+      window.removeEventListener('upload-error', this._uploadEventHandlers.error);
+      window.removeEventListener('upload-retry', this._uploadEventHandlers.retry);
+      window.removeEventListener('upload-paused', this._uploadEventHandlers.paused);
+
+      // 添加新监听
+      window.addEventListener('upload-progress', updateUploads);
+      window.addEventListener('upload-queue-changed', updateUploads);
+      window.addEventListener('upload-queue-loaded', updateUploads);
+      window.addEventListener('upload-complete', completeHandler);
+      window.addEventListener('upload-error', errorHandler);
+      window.addEventListener('upload-retry', retryHandler);
+      window.addEventListener('upload-paused', pausedHandler);
     },
 
-    // 新增批量控制方法
+    // 批量控制方法
     pauseAllUploads() {
       window.UploadManager.pauseAllUploads();
     },
     cancelAllUploads() {
       window.UploadManager.cancelAllUploads();
+    },
+    resumeAllUploads() {
+      window.UploadManager.resumeAllUploads();
     },
 
     setupTreeEvents() {

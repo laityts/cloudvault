@@ -660,7 +660,7 @@
   <!-- 提示容器 -->
   <div class="toast-container" id="toast-container"></div>
 
-  <!-- 上传面板（悬浮面板） - 已修改头部 -->
+  <!-- 上传面板（悬浮面板） - 已修改头部，增加恢复全部按钮 -->
   <div x-show="uploads.length > 0" class="upload-panel">
     <div class="flex items-center justify-between px-4 py-3 border-b" style="border-color:var(--border)">
       <div class="flex gap-2 text-sm font-medium">
@@ -669,6 +669,7 @@
       </div>
       <div class="flex gap-2">
         <button @click="pauseAllUploads()" class="text-xs" style="color:var(--text-muted)">暂停全部</button>
+        <button @click="resumeAllUploads()" class="text-xs" style="color:var(--text-muted)">恢复全部</button>
         <button @click="cancelAllUploads()" class="text-xs" style="color:var(--text-muted)">取消全部</button>
         <button @click="clearCompletedUploads()" class="text-xs" style="color:var(--text-muted)">清除已完成</button>
       </div>
