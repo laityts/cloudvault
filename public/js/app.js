@@ -61,6 +61,7 @@ function cloudvault() {
 
     // 用于存储事件处理函数引用，以便移除
     _uploadEventHandlers: {},
+    _uploadEventsBound: false, // 确保只绑定一次
 
     get currentSubfolders() {
       if (this.currentFolder === 'root') {
@@ -83,7 +84,7 @@ function cloudvault() {
       }
 
       this.setupDragDrop();
-      this.setupUploadEvents(); // 会先移除旧监听再添加
+      this.setupUploadEvents(); // 会先检查标志，避免重复
       this.setupTreeEvents();
 
       await Promise.all([this.fetchFolders(), this.fetchStats()]);
@@ -112,6 +113,10 @@ function cloudvault() {
     },
 
     setupUploadEvents() {
+      // 如果已经绑定过，则不再重复绑定
+      if (this._uploadEventsBound) return;
+      this._uploadEventsBound = true;
+
       // 定义更新函数
       const updateUploads = () => {
         this.uploads = window.UploadManager.queue.map(item => ({
@@ -139,11 +144,6 @@ function cloudvault() {
       // 保存处理函数引用
       this._uploadEventHandlers.updateUploads = updateUploads;
 
-      // 先移除可能存在的旧监听，避免重复
-      window.removeEventListener('upload-progress', this._uploadEventHandlers.updateUploads);
-      window.removeEventListener('upload-queue-changed', this._uploadEventHandlers.updateUploads);
-      window.removeEventListener('upload-queue-loaded', this._uploadEventHandlers.updateUploads);
-
       // 定义带 toast 的事件处理函数并保存引用
       const completeHandler = (e) => {
         this.showToast(e.detail.name + ' 上传成功', 'success');
@@ -170,11 +170,6 @@ function cloudvault() {
       this._uploadEventHandlers.error = errorHandler;
       this._uploadEventHandlers.retry = retryHandler;
       this._uploadEventHandlers.paused = pausedHandler;
-
-      window.removeEventListener('upload-complete', this._uploadEventHandlers.complete);
-      window.removeEventListener('upload-error', this._uploadEventHandlers.error);
-      window.removeEventListener('upload-retry', this._uploadEventHandlers.retry);
-      window.removeEventListener('upload-paused', this._uploadEventHandlers.paused);
 
       // 添加新监听
       window.addEventListener('upload-progress', updateUploads);
