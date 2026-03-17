@@ -191,7 +191,7 @@
       </div>
 
       <!-- 文件网格/列表 -->
-      <div class="flex-1 overflow-y-auto p-4">
+      <div class="flex-1 overflow-y-auto p-4" x-ref="scrollContainer">
         <!-- 加载中 -->
         <div x-show="loading" class="empty-state">
           <svg class="spinner w-8 h-8 text-accent-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
@@ -317,6 +317,9 @@
             </tbody>
           </table>
         </div>
+        
+        <!-- 滚动加载触发器（仅当还有更多且未加载时显示） -->
+        <div x-show="hasMore && !loadingMore" x-intersect="loadMore()" class="h-10"></div>
       </div>
     </main>
   </div>
@@ -332,6 +335,9 @@
 
   <!-- 右键菜单 (文件) -->
   <div x-show="ctxMenu.show" x-transition @click.away="ctxMenu.show = false" class="ctx-menu" :style="'top:'+ctxMenu.y+'px;left:'+ctxMenu.x+'px'">
+    <button @click="showFileInfo(ctxMenu.file)">
+      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> 文件信息
+    </button>
     <button @click="shareFile(ctxMenu.file)"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-2.03a4.5 4.5 0 00-1.242-7.244l-4.5-4.5a4.5 4.5 0 00-6.364 6.364L5.25 9.12"/></svg> 分享</button>
     <button @click="downloadFile(ctxMenu.file)"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg> 下载</button>
     <button @click="showMoveModal(ctxMenu.file)"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776"/></svg> 移动到...</button>
@@ -860,6 +866,63 @@
     </div>
   </div>
 
+  <!-- 文件信息模态框 -->
+  <div x-show="fileInfoModal.show" x-transition class="modal-backdrop" @click.self="fileInfoModal.show = false">
+    <div class="modal-content" style="max-width: 500px;">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold">文件信息</h3>
+        <button @click="fileInfoModal.show = false" class="p-1.5 rounded-lg hover:bg-gray-700">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <div x-show="fileInfoModal.loading" class="py-8 text-center">
+        <svg class="spinner w-6 h-6 mx-auto text-accent-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+      </div>
+
+      <div x-show="!fileInfoModal.loading && fileInfoModal.info" class="space-y-3 text-sm">
+        <div class="flex items-center gap-3 pb-3 border-b" style="border-color:var(--border)">
+          <span class="text-3xl" x-text="getFileIcon(fileInfoModal.file?.type, fileInfoModal.file?.name)"></span>
+          <div class="flex-1 min-w-0">
+            <p class="font-medium truncate" x-text="fileInfoModal.file?.name"></p>
+            <p class="text-xs" style="color:var(--text-muted)" x-text="'上传于 ' + formatDate(fileInfoModal.info.uploadedAt)"></p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <p class="text-xs" style="color:var(--text-muted)">大小</p>
+            <p class="font-mono text-xs" x-text="formatBytes(fileInfoModal.info.size)"></p>
+          </div>
+          <div>
+            <p class="text-xs" style="color:var(--text-muted)">类型</p>
+            <p class="font-mono text-xs truncate" x-text="fileInfoModal.info.type || '未知'"></p>
+          </div>
+          <div>
+            <p class="text-xs" style="color:var(--text-muted)">下载次数</p>
+            <p class="font-mono text-xs" x-text="fileInfoModal.info.downloads"></p>
+          </div>
+          <div>
+            <p class="text-xs" style="color:var(--text-muted)">分享状态</p>
+            <p class="font-mono text-xs" x-text="fileInfoModal.info.shareToken ? (fileInfoModal.info.sharePassword ? '密码保护' : '公开') : '未分享'"></p>
+          </div>
+          <div class="col-span-2">
+            <p class="text-xs" style="color:var(--text-muted)">SHA1</p>
+            <p class="font-mono text-xs break-all" x-text="fileInfoModal.info.sha1 || '未计算'"></p>
+          </div>
+          <div class="col-span-2">
+            <p class="text-xs" style="color:var(--text-muted)">SHA256</p>
+            <p class="font-mono text-xs break-all" x-text="fileInfoModal.info.sha256 || '未计算'"></p>
+          </div>
+          <div x-show="fileInfoModal.info.shareExpiresAt" class="col-span-2">
+            <p class="text-xs" style="color:var(--text-muted)">分享过期时间</p>
+            <p class="font-mono text-xs" x-text="new Date(fileInfoModal.info.shareExpiresAt).toLocaleString()"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- 脚本引入顺序 -->
@@ -869,6 +932,8 @@
 <script src="/js/db.js" type="module"></script>
 <script src="/js/upload.js" type="module"></script>
 <script src="/js/app.js"></script>
+<!-- Alpine.js 插件 -->
+<script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/intersect@3/dist/cdn.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 </body>
 </html>

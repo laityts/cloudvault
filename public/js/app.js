@@ -18,7 +18,7 @@ function cloudvault() {
     showNewFolderModal: false,
     newFolderName: '',
     loading: true,
-    uploads: [], // 由 UploadManager 更新（悬浮面板用）
+    uploads: [],
     sidebarOpen: false,
     ctxMenu: { show: false, x: 0, y: 0, file: null },
     folderCtxMenu: { show: false, x: 0, y: 0, folder: null },
@@ -43,7 +43,10 @@ function cloudvault() {
 
     // 缓存
     cache: {},
-    cacheTTL: 5 * 60 * 1000, // 5分钟
+    cacheTTL: 5 * 60 * 1000,
+
+    // 文件信息模态框
+    fileInfoModal: { show: false, file: null, info: null, loading: false },
 
     sharesModal: {
       show: false,
@@ -81,7 +84,7 @@ function cloudvault() {
       this.setupTreeEvents();
 
       await Promise.all([this.fetchFolders(), this.fetchStats()]);
-      await this.fetchFiles(false); // 加载第一页
+      await this.fetchFiles(false);
       this.loading = false;
     },
 
@@ -135,7 +138,7 @@ function cloudvault() {
       window.addEventListener('upload-complete', (e) => {
         this.showToast(e.detail.name + ' 上传成功', 'success');
         updateUploads();
-        this.fetchFiles(false); // 重置分页
+        this.fetchFiles(false);
         this.fetchStats();
         this.fetchFolders();
       });
@@ -469,10 +472,6 @@ function cloudvault() {
       return res;
     },
 
-    /**
-     * 获取文件列表（支持分页和缓存）
-     * @param {boolean} append 是否追加到现有列表（用于加载更多）
-     */
     async fetchFiles(append = false) {
       if (!append) {
         this.page = 1;
@@ -489,7 +488,6 @@ function cloudvault() {
       const cached = this.cache[cacheKey];
       const now = Date.now();
       if (cached && now - cached.timestamp < this.cacheTTL) {
-        // 使用缓存
         if (append) {
           this.files = [...this.files, ...cached.data.files];
         } else {
@@ -512,7 +510,6 @@ function cloudvault() {
       if (!res) return;
       const data = await res.json();
 
-      // 存入缓存
       this.cache[cacheKey] = {
         timestamp: now,
         data: { files: data.files, hasMore: data.hasMore }
@@ -529,7 +526,6 @@ function cloudvault() {
       this.loadingMore = false;
     },
 
-    // 加载更多（用于“加载更多”按钮或无限滚动）
     loadMore() {
       this.fetchFiles(true);
     },
@@ -550,8 +546,6 @@ function cloudvault() {
     },
 
     get filteredFiles() {
-      // 注意：此处只做排序，不再过滤搜索（搜索已由后端完成）
-      // 如果前端需要额外过滤（如 typeFilter），可以在此实现
       let result = [...this.files];
       if (this.typeFilter !== 'all') {
         result = result.filter(f => this.getFileCategory(f.type, f.name) === this.typeFilter);
@@ -599,7 +593,6 @@ function cloudvault() {
     toggleSort(field) {
       if (this.sortBy === field) this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
       else { this.sortBy = field; this.sortDir = field === 'name' ? 'asc' : 'desc'; }
-      // 排序后无需重新请求，因为已在本地排序
     },
 
     selectFile(id, event) {
@@ -832,6 +825,25 @@ function cloudvault() {
       }
     },
 
+    async showFileInfo(file) {
+      this.ctxMenu.show = false;
+      this.fileInfoModal = { show: true, file, info: null, loading: true };
+      try {
+        const res = await this.apiFetch('/api/files/' + file.id + '/info');
+        if (res && res.ok) {
+          this.fileInfoModal.info = await res.json();
+        } else {
+          this.showToast('获取文件信息失败', 'error');
+          this.fileInfoModal.show = false;
+        }
+      } catch {
+        this.showToast('获取文件信息失败', 'error');
+        this.fileInfoModal.show = false;
+      } finally {
+        this.fileInfoModal.loading = false;
+      }
+    },
+
     async previewFile(file) {
       if (file.type.startsWith('image/')) {
         this.openLightbox(file);
@@ -1033,6 +1045,7 @@ function cloudvault() {
         this.folderShareLinkModal.show = false;
         this.sharesModal.show = false;
         this.showUploadsModal = false;
+        this.fileInfoModal.show = false;
       }
     },
 
@@ -1049,7 +1062,6 @@ function cloudvault() {
       }, 3000);
     },
 
-    // ========== 分享管理相关方法 ==========
     openSharesModal() {
       this.sharesModal.show = true;
       this.sharesModal.tab = 'files';
@@ -1108,7 +1120,6 @@ function cloudvault() {
       }
     },
 
-    // ========== 上传控制相关方法 ==========
     pauseUpload(id) {
       window.UploadManager.pauseUpload(id);
     },
@@ -1152,7 +1163,6 @@ function cloudvault() {
       }));
     },
 
-    // ========== 格式化方法 ==========
     formatBytes(bytes) {
       if (!bytes || bytes === 0) return '0 B';
       const k = 1024;

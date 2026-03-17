@@ -11,23 +11,28 @@ CREATE TABLE IF NOT EXISTS files (
   share_password TEXT,
   share_expires_at TEXT,
   downloads INTEGER DEFAULT 0,
-  -- 新增字段：用于分块上传和断点续传
-  upload_id TEXT,                    -- multipart upload ID
-  upload_chunks TEXT,                -- 已上传的分块信息（JSON格式）
-  upload_status TEXT DEFAULT 'pending', -- pending, uploading, paused, done, error
-  upload_created_at TEXT,            -- 上传任务创建时间
-  upload_updated_at TEXT,            -- 上传任务最后更新时间
-  upload_total_chunks INTEGER,       -- 总分块数
-  upload_completed_chunks INTEGER DEFAULT 0, -- 已完成分块数
-  upload_retry_count INTEGER DEFAULT 0, -- 重试次数
-  upload_error TEXT                   -- 错误信息
+  -- 分块上传字段
+  upload_id TEXT,
+  upload_chunks TEXT,
+  upload_status TEXT DEFAULT 'pending',
+  upload_created_at TEXT,
+  upload_updated_at TEXT,
+  upload_total_chunks INTEGER,
+  upload_completed_chunks INTEGER DEFAULT 0,
+  upload_retry_count INTEGER DEFAULT 0,
+  upload_error TEXT,
+  -- 哈希字段
+  sha1 TEXT,
+  sha256 TEXT
 );
 
 CREATE INDEX idx_files_folder ON files(folder);
 CREATE INDEX idx_files_share_token ON files(share_token);
 CREATE INDEX idx_files_uploaded_at ON files(uploaded_at);
-CREATE INDEX idx_files_upload_status ON files(upload_status); -- 新增索引
-CREATE INDEX idx_files_upload_id ON files(upload_id);         -- 新增索引
+CREATE INDEX idx_files_upload_status ON files(upload_status);
+CREATE INDEX idx_files_upload_id ON files(upload_id);
+-- 加速分页查询的联合索引
+CREATE INDEX idx_files_folder_status ON files(folder, upload_status);
 
 -- 文件夹表
 CREATE TABLE IF NOT EXISTS folders (
@@ -55,7 +60,6 @@ CREATE TABLE IF NOT EXISTS folder_share_links (
   expires_at TEXT,
   created_at TEXT NOT NULL
 );
-
 CREATE INDEX idx_folder_share_links_folder ON folder_share_links(folder);
 
 -- 文件夹分享元数据表
@@ -72,7 +76,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL
 );
-
 CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
 
 -- 设置表
@@ -81,12 +84,10 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
--- 统计表（用于快速获取统计数据）
+-- 统计表
 CREATE TABLE IF NOT EXISTS stats (
   id INTEGER PRIMARY KEY DEFAULT 1,
   total_files INTEGER DEFAULT 0,
   total_size INTEGER DEFAULT 0
 );
-
--- 插入初始统计记录
 INSERT OR IGNORE INTO stats (id, total_files, total_size) VALUES (1, 0, 0);
