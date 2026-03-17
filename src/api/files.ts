@@ -544,6 +544,7 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
   return json({ folder: newName });
 }
 
+// MODIFIED: 增加了文件夹统计信息
 export async function listFolders(_request: Request, env: Env): Promise<Response> {
   const folderRows = await env.DB.prepare(`SELECT path FROM folders`).all();
   const folderSet = new Set<string>(folderRows.results.map(r => r.path as string));
@@ -558,6 +559,22 @@ export async function listFolders(_request: Request, env: Env): Promise<Response
       folderSet.add(path);
     }
   }
+
+  // 获取每个文件夹的直接文件统计（只统计直接位于该文件夹下的文件，不包括子文件夹）
+  const fileStats = await env.DB.prepare(`
+    SELECT folder, COUNT(*) as fileCount, SUM(size) as totalSize
+    FROM files
+    WHERE (upload_status = 'done' OR upload_status IS NULL)
+    GROUP BY folder
+  `).all();
+  const statsMap = new Map();
+  for (const row of fileStats.results) {
+    statsMap.set(row.folder, {
+      fileCount: row.fileCount,
+      totalSize: row.totalSize || 0,
+    });
+  }
+
   const sharedFolders = await getSharedFolders(env);
   const excludedFolders = await getExcludedFolders(env);
   const folderList = Array.from(folderSet).sort().map(name => ({
@@ -565,6 +582,8 @@ export async function listFolders(_request: Request, env: Env): Promise<Response
     shared: isFolderShared(name, sharedFolders, excludedFolders),
     directlyShared: sharedFolders.has(name),
     excluded: excludedFolders.has(name),
+    fileCount: statsMap.get(name)?.fileCount || 0,
+    totalSize: statsMap.get(name)?.totalSize || 0,
   }));
   return json({ folders: folderList });
 }

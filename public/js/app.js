@@ -72,16 +72,18 @@ function cloudvault() {
       return this.uploads.some(u => u.status === 'paused');
     },
 
+    // MODIFIED: 返回文件夹对象而不是只返回名称
     get currentSubfolders() {
       if (this.currentFolder === 'root') {
+        // 根目录下的直接子文件夹（不包含路径分隔符的）
         return this.folders
           .filter(f => !f.name.includes('/'))
-          .map(f => f.name);
+          .map(f => ({ ...f, shortName: f.name }));
       } else {
         const prefix = this.currentFolder + '/';
         return this.folders
           .filter(f => f.name.startsWith(prefix) && !f.name.slice(prefix.length).includes('/'))
-          .map(f => f.name.slice(prefix.length));
+          .map(f => ({ ...f, shortName: f.name.slice(prefix.length) }));
       }
     },
 
@@ -596,11 +598,23 @@ function cloudvault() {
       this.fetchFiles(true);
     },
 
+    // MODIFIED: 处理后端返回的文件夹统计
     async fetchFolders() {
       const res = await this.apiFetch('/api/folders');
       if (!res) return;
       const data = await res.json();
-      const folders = (data.folders || []).map(f => typeof f === 'string' ? { name: f, shared: false, directlyShared: false, excluded: false } : f);
+      const folders = (data.folders || []).map(f => {
+        // 确保字段存在
+        const base = typeof f === 'string' ? { name: f } : f;
+        return {
+          name: base.name,
+          shared: base.shared || false,
+          directlyShared: base.directlyShared || false,
+          excluded: base.excluded || false,
+          fileCount: base.fileCount || 0,
+          totalSize: base.totalSize || 0,
+        };
+      });
       this.folders = folders;
       this._folderShareHash = folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
     },
@@ -762,7 +776,7 @@ function cloudvault() {
           if (!this.folders.find(f => f.name === fullName)) {
             const parentFolder = this.currentFolder !== 'root' ? this.folders.find(f => f.name === this.currentFolder) : null;
             const inherited = parentFolder ? (parentFolder.shared || parentFolder.directlyShared) && !parentFolder.excluded : false;
-            this.folders = [...this.folders, { name: fullName, shared: inherited, directlyShared: false, excluded: false }];
+            this.folders = [...this.folders, { name: fullName, shared: inherited, directlyShared: false, excluded: false, fileCount: 0, totalSize: 0 }];
           }
           this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
           if (this.currentFolder !== 'root') {

@@ -206,15 +206,18 @@
 
         <!-- 网格视图 -->
         <div x-show="!loading && view === 'grid'" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-          <!-- 文件夹项 -->
-          <template x-for="folderName in currentSubfolders" :key="folderName">
-            <div class="file-card p-3" @click="navigateFolder(currentFolder === 'root' ? folderName : currentFolder + '/' + folderName)" @contextmenu.prevent="openFolderContextMenu($event, folderName)">
+          <!-- 文件项 -->
+          <template x-for="folder in currentSubfolders" :key="folder.name">
+            <div class="file-card p-3" @click="navigateFolder(currentFolder === 'root' ? folder.shortName : currentFolder + '/' + folder.shortName)" @contextmenu.prevent="openFolderContextMenu($event, folder.shortName)">
               <div class="w-full aspect-square rounded-lg flex items-center justify-center mb-2 overflow-hidden" style="background:var(--bg-tertiary)">
                 <span class="text-3xl">📁</span>
               </div>
-              <p class="text-xs font-medium truncate" x-text="folderName" :title="folderName"></p>
+              <p class="text-xs font-medium truncate" x-text="folder.shortName" :title="folder.shortName"></p>
               <div class="flex items-center justify-between mt-1">
-                <span class="text-xs" style="color:var(--text-muted)">文件夹</span>
+                <span class="text-xs" style="color:var(--text-muted)">
+                  <span x-text="folder.fileCount + ' 个文件'"></span>
+                  <span x-show="folder.totalSize > 0" x-text="' · ' + formatBytes(folder.totalSize)"></span>
+                </span>
               </div>
             </div>
           </template>
@@ -263,25 +266,28 @@
             </thead>
             <tbody>
               <!-- 文件夹行 -->
-              <template x-for="folderName in currentSubfolders" :key="folderName">
-                <tr class="file-row cursor-pointer" @click="navigateFolder(currentFolder === 'root' ? folderName : currentFolder + '/' + folderName)" @contextmenu.prevent="openFolderContextMenu($event, folderName)">
+              <template x-for="folder in currentSubfolders" :key="folder.name">
+                <tr class="file-row cursor-pointer" @click="navigateFolder(currentFolder === 'root' ? folder.shortName : currentFolder + '/' + folder.shortName)" @contextmenu.prevent="openFolderContextMenu($event, folder.shortName)">
                   <td class="py-2 px-3"><input type="checkbox" disabled></td>
                   <td class="py-2 px-3">
                     <div class="flex items-center gap-2">
                       <span>📁</span>
                       <div class="min-w-0">
-                        <span class="truncate block" x-text="folderName"></span>
+                        <span class="truncate block" x-text="folder.shortName"></span>
                       </div>
                     </div>
                   </td>
                   <td class="py-2 px-3 hidden sm:table-cell"><span class="type-pill type-pill-other">文件夹</span></td>
-                  <td class="py-2 px-3 hidden sm:table-cell" style="color:var(--text-muted)">—</td>
+                  <td class="py-2 px-3 hidden sm:table-cell" style="color:var(--text-muted)">
+                    <span x-text="folder.fileCount + ' 个文件'"></span>
+                    <span x-show="folder.totalSize > 0" x-text="' · ' + formatBytes(folder.totalSize)"></span>
+                  </td>
                   <td class="py-2 px-3 hidden md:table-cell" style="color:var(--text-muted)">—</td>
                   <td class="py-2 px-3 hidden lg:table-cell">
-                    <span x-show="getFolderShareStatus(folderName).shared" class="badge badge-shared cursor-pointer" @click.stop="shareFolder(getFolderObject(folderName))">📁 分享</span>
+                    <span x-show="folder.shared" class="badge badge-shared cursor-pointer" @click.stop="shareFolder(folder)">📁 分享</span>
                   </td>
                   <td class="py-2 px-3">
-                    <button @click.stop="openFolderContextMenu($event, folderName)" class="p-1 rounded" style="color:var(--text-muted)">
+                    <button @click.stop="openFolderContextMenu($event, folder.shortName)" class="p-1 rounded" style="color:var(--text-muted)">
                       <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z"/></svg>
                     </button>
                   </td>
