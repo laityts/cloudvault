@@ -660,7 +660,7 @@
   <!-- 提示容器 -->
   <div class="toast-container" id="toast-container"></div>
 
-  <!-- 上传面板（悬浮面板） - 已使用SVG图标代替文字 -->
+  <!-- ========== 悬浮上传面板（已修改） ========== -->
   <div x-show="uploads.length > 0" class="upload-panel">
     <div class="flex items-center justify-between px-4 py-3 border-b" style="border-color:var(--border)">
       <div class="flex gap-2 text-sm font-medium">
@@ -668,17 +668,39 @@
         <span class="text-xs" style="color:var(--text-muted)" x-text="'上传中 ' + uploads.filter(u => u.status === 'uploading').length"></span>
       </div>
       <div class="flex gap-1">
-        <button @click="pauseAllUploads()" class="p-1.5 rounded hover:bg-gray-700" title="暂停全部">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <!-- 动态暂停/恢复按钮（合并） -->
+        <button @click="anyPendingOrUploading ? pauseAllUploads() : (anyPaused ? resumeAllUploads() : null)" :disabled="!anyPendingOrUploading && !anyPaused" class="p-1.5 rounded hover:bg-gray-700 flex items-center gap-1 text-xs" :class="{'opacity-50 cursor-not-allowed': !anyPendingOrUploading && !anyPaused}">
+          <!-- 有活跃任务时显示暂停全部 -->
+          <template x-if="anyPendingOrUploading">
+            <span class="flex items-center gap-1">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <span>暂停</span>
+            </span>
+          </template>
+          <!-- 无活跃但有暂停时显示恢复全部 -->
+          <template x-if="!anyPendingOrUploading && anyPaused">
+            <span class="flex items-center gap-1">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <span>恢复</span>
+            </span>
+          </template>
+          <!-- 既无活跃也无暂停时显示禁用状态的暂停全部 -->
+          <template x-if="!anyPendingOrUploading && !anyPaused">
+            <span class="flex items-center gap-1 opacity-50">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <span>暂停</span>
+            </span>
+          </template>
         </button>
-        <button @click="resumeAllUploads()" class="p-1.5 rounded hover:bg-gray-700" title="恢复全部">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <!-- 取消全部按钮（图标更换为方形） -->
+        <button @click="cancelAllUploads()" class="p-1.5 rounded hover:bg-red-900/20 text-red-400 flex items-center gap-1 text-xs">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 6h12v12H6z"/></svg>
+          <span>取消</span>
         </button>
-        <button @click="cancelAllUploads()" class="p-1.5 rounded hover:bg-red-900/20 text-red-400" title="取消全部">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-        </button>
-        <button @click="clearCompletedUploads()" class="p-1.5 rounded hover:bg-gray-700" title="清除已完成">
+        <!-- 清除已完成按钮（原图标，增加文字） -->
+        <button @click="clearCompletedUploads()" class="p-1.5 rounded hover:bg-gray-700 flex items-center gap-1 text-xs">
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          <span>清除</span>
         </button>
       </div>
     </div>
@@ -689,7 +711,6 @@
             <div class="flex items-center justify-between">
               <p class="text-xs font-medium truncate" x-text="upload.name"></p>
               <div class="flex items-center gap-1 ml-2">
-                <!-- 控制按钮 -->
                 <template x-if="upload.status === 'pending' || upload.status === 'uploading'">
                   <button @click="pauseUpload(upload.id)" class="p-0.5 rounded hover:bg-gray-700" title="暂停">
                     <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -726,7 +747,7 @@
     </div>
   </div>
 
-  <!-- ========== 上传任务模态框（已添加批量控制按钮） ========== -->
+  <!-- ========== 上传任务模态框（已修改） ========== -->
   <div x-show="showUploadsModal" x-transition class="modal-backdrop" @click.self="showUploadsModal = false">
     <div class="modal-content" style="max-width: 800px; width: 90%;">
       <div class="flex items-center justify-between mb-4">
@@ -772,7 +793,6 @@
               </div>
             </div>
             <div class="flex items-center gap-1 ml-2">
-              <!-- 控制按钮 -->
               <template x-if="upload.status === 'pending' || upload.status === 'uploading'">
                 <button @click="pauseUpload(upload.id)" class="p-1.5 rounded hover:bg-gray-700" title="暂停">
                   <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -796,27 +816,40 @@
         </template>
       </div>
 
-      <!-- 底部操作 - 新增批量控制按钮 -->
+      <!-- 底部操作（已修改） -->
       <div class="flex justify-between items-center mt-4">
         <div class="flex gap-2">
-          <button @click="pauseAllUploads()" class="btn-secondary text-xs flex items-center gap-1" title="暂停全部">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            <span>暂停全部</span>
+          <!-- 动态暂停/恢复按钮（合并） -->
+          <button @click="anyPendingOrUploading ? pauseAllUploads() : (anyPaused ? resumeAllUploads() : null)" :disabled="!anyPendingOrUploading && !anyPaused" class="btn-secondary text-xs flex items-center gap-1" :class="{'opacity-50 cursor-not-allowed': !anyPendingOrUploading && !anyPaused}">
+            <template x-if="anyPendingOrUploading">
+              <span class="flex items-center gap-1">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>暂停</span>
+              </span>
+            </template>
+            <template x-if="!anyPendingOrUploading && anyPaused">
+              <span class="flex items-center gap-1">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>恢复</span>
+              </span>
+            </template>
+            <template x-if="!anyPendingOrUploading && !anyPaused">
+              <span class="flex items-center gap-1 opacity-50">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>暂停</span>
+              </span>
+            </template>
           </button>
-          <button @click="resumeAllUploads()" class="btn-secondary text-xs flex items-center gap-1" title="恢复全部">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            <span>恢复全部</span>
-          </button>
-          <button @click="cancelAllUploads()" class="btn-secondary text-xs flex items-center gap-1 text-red-400" title="取消全部">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-            <span>取消全部</span>
+          <!-- 取消全部按钮（图标更换为方形） -->
+          <button @click="cancelAllUploads()" class="btn-secondary text-xs flex items-center gap-1 text-red-400">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 6h12v12H6z"/></svg>
+            <span>取消</span>
           </button>
         </div>
-        <button @click="clearCompletedUploads()" class="btn-secondary text-xs">清除已完成</button>
+        <button @click="clearCompletedUploads()" class="btn-secondary text-xs">清除</button>
       </div>
     </div>
   </div>
-  <!-- ========== 结束：上传任务模态框 ========== -->
 
   <!-- 分享管理模态框 -->
   <div x-show="sharesModal.show" x-transition class="modal-backdrop" @click.self="sharesModal.show = false">
