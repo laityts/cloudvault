@@ -35,23 +35,29 @@ function cloudvault() {
     lightbox: { show: false, images: [], currentIndex: 0 },
     folderShareLinkModal: { show: false, folder: '', token: null, password: '', expiresInDays: 0, hasPassword: false, expiresAt: null },
 
-    // 分享管理模态框数据
+    // 分页相关
+    page: 1,
+    limit: 50,
+    hasMore: true,
+    loadingMore: false,
+
+    // 缓存
+    cache: {},
+    cacheTTL: 5 * 60 * 1000, // 5分钟
+
     sharesModal: {
       show: false,
-      tab: 'files', // 'files' or 'folders'
+      tab: 'files',
       files: [],
       folders: [],
       loading: false,
     },
 
-    // 新增：上传任务模态框数据
     showUploadsModal: false,
-    allUploads: [], // 从 UploadManager 获取的完整任务列表
+    allUploads: [],
 
-    // 获取当前文件夹的直接子文件夹名称数组
     get currentSubfolders() {
       if (this.currentFolder === 'root') {
-        // 根目录下的子文件夹：路径中不含 '/' 的文件夹
         return this.folders
           .filter(f => !f.name.includes('/'))
           .map(f => f.name);
@@ -74,7 +80,8 @@ function cloudvault() {
       this.setupUploadEvents();
       this.setupTreeEvents();
 
-      await Promise.all([this.fetchFiles(), this.fetchFolders(), this.fetchStats()]);
+      await Promise.all([this.fetchFolders(), this.fetchStats()]);
+      await this.fetchFiles(false); // 加载第一页
       this.loading = false;
     },
 
@@ -100,7 +107,6 @@ function cloudvault() {
 
     setupUploadEvents() {
       const updateUploads = () => {
-        // 更新悬浮面板的上传任务
         this.uploads = window.UploadManager.queue.map(item => ({
           id: item.id,
           name: item.name,
@@ -109,7 +115,6 @@ function cloudvault() {
           speed: item.speed,
           eta: item.eta,
         }));
-        // 更新完整任务列表（用于模态框）
         this.allUploads = window.UploadManager.getAllItems().map(item => ({
           id: item.id,
           name: item.name,
@@ -130,7 +135,7 @@ function cloudvault() {
       window.addEventListener('upload-complete', (e) => {
         this.showToast(e.detail.name + ' 上传成功', 'success');
         updateUploads();
-        this.fetchFiles();
+        this.fetchFiles(false); // 重置分页
         this.fetchStats();
         this.fetchFolders();
       });
@@ -268,19 +273,16 @@ function cloudvault() {
       return false;
     },
 
-    // 根据短文件夹名获取完整的文件夹对象
     getFolderObject(shortName) {
       const fullPath = this.currentFolder === 'root' ? shortName : this.currentFolder + '/' + shortName;
       return this.folders.find(f => f.name === fullPath) || { name: fullPath, shared: false, directlyShared: false, excluded: false };
     },
 
-    // 获取文件夹的分享状态（用于列表视图显示徽章）
     getFolderShareStatus(shortName) {
       const folder = this.getFolderObject(shortName);
       return { shared: folder.shared, directlyShared: folder.directlyShared, excluded: folder.excluded };
     },
 
-    // 打开文件夹右键菜单
     openFolderContextMenu(event, shortName) {
       const folder = this.getFolderObject(shortName);
       if (!folder) return;
@@ -396,7 +398,7 @@ function cloudvault() {
           this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
           this._expandVer++;
           this.showToast('文件夹重命名成功', 'success');
-          await this.fetchFiles();
+          await this.fetchFiles(false);
         } else { this.showToast('重命名失败', 'error'); }
       } catch { this.showToast('重命名失败', 'error'); }
     },
@@ -430,7 +432,7 @@ function cloudvault() {
           if (data.deletedSubfolders > 0) parts.push(data.deletedSubfolders + ' 个子文件夹' + (data.deletedSubfolders > 1 ? '' : ''));
           var msg = '文件夹已删除' + (parts.length ? ' — 已移除 ' + parts.join(' 和 ') : '');
           this.showToast(msg, 'success');
-          await this.fetchFiles();
+          await this.fetchFiles(false);
         } else { this.showToast('删除失败', 'error'); }
       } catch { this.showToast('删除失败', 'error'); }
     },
@@ -456,7 +458,7 @@ function cloudvault() {
         if (res && res.ok) {
           const data = await res.json();
           this.showToast(data.moved + ' 个文件已移动', 'success');
-          await Promise.all([this.fetchFiles(), this.fetchFolders()]);
+          await Promise.all([this.fetchFiles(false), this.fetchFolders()]);
         } else { this.showToast('移动失败', 'error'); }
       } catch { this.showToast('移动失败', 'error'); }
     },
@@ -467,14 +469,69 @@ function cloudvault() {
       return res;
     },
 
-    async fetchFiles() {
-      const params = new URLSearchParams();
-      if (this.currentFolder !== 'root') params.set('folder', this.currentFolder);
-      if (this.searchQuery) params.set('search', this.searchQuery);
+    /**
+     * 获取文件列表（支持分页和缓存）
+     * @param {boolean} append 是否追加到现有列表（用于加载更多）
+     */
+    async fetchFiles(append = false) {
+      if (!append) {
+        this.page = 1;
+        this.hasMore = true;
+        this.files = [];
+        this.loading = true;
+      } else if (!this.hasMore || this.loadingMore) {
+        return;
+      }
+
+      this.loadingMore = append;
+
+      const cacheKey = `files_${this.currentFolder}_${this.searchQuery}_page${this.page}`;
+      const cached = this.cache[cacheKey];
+      const now = Date.now();
+      if (cached && now - cached.timestamp < this.cacheTTL) {
+        // 使用缓存
+        if (append) {
+          this.files = [...this.files, ...cached.data.files];
+        } else {
+          this.files = cached.data.files;
+        }
+        this.hasMore = cached.data.hasMore;
+        this.page++;
+        this.loading = false;
+        this.loadingMore = false;
+        return;
+      }
+
+      const params = new URLSearchParams({
+        folder: this.currentFolder !== 'root' ? this.currentFolder : '',
+        search: this.searchQuery,
+        limit: this.limit,
+        offset: (this.page - 1) * this.limit
+      });
       const res = await this.apiFetch('/api/files?' + params);
       if (!res) return;
       const data = await res.json();
-      this.files = data.files || [];
+
+      // 存入缓存
+      this.cache[cacheKey] = {
+        timestamp: now,
+        data: { files: data.files, hasMore: data.hasMore }
+      };
+
+      if (append) {
+        this.files = [...this.files, ...data.files];
+      } else {
+        this.files = data.files;
+      }
+      this.hasMore = data.hasMore;
+      if (data.files.length > 0) this.page++;
+      this.loading = false;
+      this.loadingMore = false;
+    },
+
+    // 加载更多（用于“加载更多”按钮或无限滚动）
+    loadMore() {
+      this.fetchFiles(true);
     },
 
     async fetchFolders() {
@@ -493,6 +550,8 @@ function cloudvault() {
     },
 
     get filteredFiles() {
+      // 注意：此处只做排序，不再过滤搜索（搜索已由后端完成）
+      // 如果前端需要额外过滤（如 typeFilter），可以在此实现
       let result = [...this.files];
       if (this.typeFilter !== 'all') {
         result = result.filter(f => this.getFileCategory(f.type, f.name) === this.typeFilter);
@@ -529,12 +588,18 @@ function cloudvault() {
         }
         this._expandVer++;
       }
-      if (!wasOnSameFolder) this.fetchFiles();
+      if (!wasOnSameFolder) {
+        this.page = 1;
+        this.hasMore = true;
+        this.files = [];
+        this.fetchFiles(false);
+      }
     },
 
     toggleSort(field) {
       if (this.sortBy === field) this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
       else { this.sortBy = field; this.sortDir = field === 'name' ? 'asc' : 'desc'; }
+      // 排序后无需重新请求，因为已在本地排序
     },
 
     selectFile(id, event) {
@@ -967,7 +1032,7 @@ function cloudvault() {
         this.deleteFolderModal.show = false;
         this.folderShareLinkModal.show = false;
         this.sharesModal.show = false;
-        this.showUploadsModal = false; // 新增：关闭上传任务模态框
+        this.showUploadsModal = false;
       }
     },
 
@@ -1017,9 +1082,7 @@ function cloudvault() {
         const res = await this.apiFetch('/api/share/' + fileId, { method: 'DELETE' });
         if (res && res.ok) {
           this.showToast('分享链接已撤销', 'success');
-          // 更新列表
           this.sharesModal.files = this.sharesModal.files.filter(f => f.id !== fileId);
-          // 同时更新当前文件列表中的分享状态
           const file = this.files.find(f => f.id === fileId);
           if (file) file.shareToken = null;
         } else {
@@ -1073,10 +1136,8 @@ function cloudvault() {
       return `${s}秒`;
     },
 
-    // ========== 新增：打开上传任务模态框 ==========
     openUploadsModal() {
       this.showUploadsModal = true;
-      // 立即刷新数据
       this.allUploads = window.UploadManager.getAllItems().map(item => ({
         id: item.id,
         name: item.name,

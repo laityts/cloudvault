@@ -32,14 +32,11 @@ async function getFileById(env: Env, id: string): Promise<FileMeta | null> {
   }>();
   if (!row) return null;
   
-  // 解析 uploadChunks JSON
   let uploadChunks = null;
   if (row.uploadChunks) {
     try {
       uploadChunks = JSON.parse(row.uploadChunks);
-    } catch (e) {
-      // 忽略解析错误
-    }
+    } catch (e) {}
   }
   
   return {
@@ -246,7 +243,6 @@ async function handleMultipartCreate(request: Request, env: Env): Promise<Respon
     },
   });
 
-  // 创建临时记录
   const id = crypto.randomUUID();
   const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
   const now = new Date().toISOString();
@@ -296,7 +292,6 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
   const folder = body.key.includes('/') ? body.key.substring(0, body.key.lastIndexOf('/')) : 'root';
   const now = new Date().toISOString();
 
-  // 更新文件记录为完成状态
   await env.DB.prepare(
     `UPDATE files SET 
       size = ?, 
@@ -308,7 +303,6 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
      WHERE id = ?`
   ).bind(r2Object.size, now, now, body.fileId).run();
 
-  // 获取完整的文件记录返回
   const meta = await getFileById(env, body.fileId);
   if (!meta) return error('File not found', 404);
 
@@ -329,10 +323,9 @@ async function handleMultipartAbort(request: Request, env: Env): Promise<Respons
     const multipart = env.VAULT_BUCKET.resumeMultipartUpload(key, uploadId);
     await multipart.abort();
   } catch (e) {
-    // 忽略 abort 错误
+    // ignore
   }
 
-  // 如果提供了 fileId，删除临时记录
   if (fileId) {
     await env.DB.prepare(`DELETE FROM files WHERE id = ?`).bind(fileId).run();
   }
@@ -365,42 +358,68 @@ async function handleMultipartProgress(request: Request, env: Env): Promise<Resp
   return json({ success: true });
 }
 
+/**
+ * 分页获取文件列表
+ */
 export async function list(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const folderFilter = url.searchParams.get('folder');
   const searchFilter = url.searchParams.get('search')?.toLowerCase();
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200); // 每页最多200
+  const offset = parseInt(url.searchParams.get('offset') || '0');
 
-  // 基础查询：只返回已完成的上传（upload_status = 'done' 或 upload_status IS NULL）
-  let query = `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
-                      share_token as shareToken, share_password as sharePassword, 
-                      share_expires_at as shareExpiresAt, downloads
-               FROM files 
-               WHERE (upload_status = 'done' OR upload_status IS NULL)`;
+  // 基础查询：只返回已完成的上传
+  let query = `
+    SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+           share_token as shareToken, downloads
+    FROM files 
+    WHERE (upload_status = 'done' OR upload_status IS NULL)
+  `;
   const params: any[] = [];
 
   if (folderFilter) {
-    // 如果指定了文件夹，就只查询该文件夹下的文件
     query += ` AND folder = ?`;
     params.push(folderFilter);
   } else if (!searchFilter) {
-    // 如果没有指定文件夹且没有搜索关键词，则默认只显示根目录下的文件
     query += ` AND folder = 'root'`;
   }
-  // 注意：如果有搜索关键词，我们不限制文件夹，以便在所有文件夹中搜索
   if (searchFilter) {
     query += ` AND LOWER(name) LIKE ?`;
     params.push(`%${searchFilter}%`);
   }
-  query += ` ORDER BY uploaded_at DESC`;
+  query += ` ORDER BY uploaded_at DESC LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
 
   const rows = await env.DB.prepare(query).bind(...params).all();
   const files = rows.results.map(r => ({
     id: r.id, key: r.key, name: r.name, size: r.size, type: r.type, folder: r.folder,
-    uploadedAt: r.uploadedAt, shareToken: r.shareToken, sharePassword: r.sharePassword,
-    shareExpiresAt: r.shareExpiresAt, downloads: r.downloads,
+    uploadedAt: r.uploadedAt, shareToken: r.shareToken, downloads: r.downloads,
   }));
 
-  return json({ files, cursor: null, totalFiles: files.length });
+  // 查询总记录数（用于前端判断是否还有更多）
+  let countQuery = `
+    SELECT COUNT(*) as total FROM files 
+    WHERE (upload_status = 'done' OR upload_status IS NULL)
+  `;
+  const countParams: any[] = [];
+
+  if (folderFilter) {
+    countQuery += ` AND folder = ?`;
+    countParams.push(folderFilter);
+  } else if (!searchFilter) {
+    countQuery += ` AND folder = 'root'`;
+  }
+  if (searchFilter) {
+    countQuery += ` AND LOWER(name) LIKE ?`;
+    countParams.push(`%${searchFilter}%`);
+  }
+  const countResult = await env.DB.prepare(countQuery).bind(...countParams).first<{ total: number }>();
+
+  return json({
+    files,
+    hasMore: offset + files.length < (countResult?.total || 0),
+    total: countResult?.total || 0,
+  });
 }
 
 export async function get(request: Request, env: Env): Promise<Response> {
@@ -504,21 +523,16 @@ export async function deleteFolder(request: Request, env: Env): Promise<Response
   if (!body.folder?.trim()) return error('Folder name required', 400);
   const folder = body.folder.trim();
 
-  // 删除文件夹条目
   await env.DB.prepare(`DELETE FROM folders WHERE path = ?`).bind(folder).run();
-
-  // 删除相关的分享和排除记录
   await env.DB.prepare(`DELETE FROM folder_shares WHERE folder = ?`).bind(folder).run();
   await env.DB.prepare(`DELETE FROM folder_excludes WHERE folder = ?`).bind(folder).run();
 
-  // 删除文件夹分享链接
   const linkMeta = await env.DB.prepare(`SELECT token FROM folder_share_meta WHERE folder = ?`).bind(folder).first<{ token: string }>();
   if (linkMeta) {
     await env.DB.prepare(`DELETE FROM folder_share_links WHERE token = ?`).bind(linkMeta.token).run();
     await env.DB.prepare(`DELETE FROM folder_share_meta WHERE folder = ?`).bind(folder).run();
   }
 
-  // 删除子文件夹
   const subFolders = await env.DB.prepare(
     `SELECT path FROM folders WHERE path LIKE ?`
   ).bind(folder + '/%').all();
@@ -534,7 +548,6 @@ export async function deleteFolder(request: Request, env: Env): Promise<Response
     }
   }
 
-  // 删除包含的文件
   const filesToDelete = await env.DB.prepare(
     `SELECT id, key, size FROM files WHERE folder = ? OR folder LIKE ? AND (upload_status = 'done' OR upload_status IS NULL)`
   ).bind(folder, folder + '/%').all();
@@ -547,7 +560,6 @@ export async function deleteFolder(request: Request, env: Env): Promise<Response
     deletedCount++;
   }
 
-  // 删除未完成的临时文件记录
   await env.DB.prepare(
     `DELETE FROM files WHERE folder = ? OR folder LIKE ? AND upload_status != 'done'`
   ).bind(folder, folder + '/%').run();
@@ -566,12 +578,10 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
   const newName = body.newName.trim();
   if (oldName === newName) return json({ folder: newName });
 
-  // 更新文件夹本身
   await env.DB.prepare(
     `UPDATE folders SET path = ? WHERE path = ?`
   ).bind(newName, oldName).run();
 
-  // 更新子文件夹路径
   const subFolders = await env.DB.prepare(
     `SELECT path FROM folders WHERE path LIKE ?`
   ).bind(oldName + '/%').all();
@@ -583,7 +593,6 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
     ).bind(newSub, oldSub).run();
   }
 
-  // 更新folder_shares
   const share = await env.DB.prepare(`SELECT * FROM folder_shares WHERE folder = ?`).bind(oldName).first();
   if (share) {
     await env.DB.prepare(`DELETE FROM folder_shares WHERE folder = ?`).bind(oldName).run();
@@ -597,7 +606,6 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
     await env.DB.prepare(`INSERT INTO folder_shares (folder, shared_at) VALUES (?, ?)`).bind(newSub, row.shared_at).run();
   }
 
-  // 更新folder_excludes
   const exclude = await env.DB.prepare(`SELECT * FROM folder_excludes WHERE folder = ?`).bind(oldName).first();
   if (exclude) {
     await env.DB.prepare(`DELETE FROM folder_excludes WHERE folder = ?`).bind(oldName).run();
@@ -611,7 +619,6 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
     await env.DB.prepare(`INSERT INTO folder_excludes (folder, excluded_at) VALUES (?, ?)`).bind(newSub, row.excluded_at).run();
   }
 
-  // 更新folder_share_meta
   const linkMeta = await env.DB.prepare(`SELECT * FROM folder_share_meta WHERE folder = ?`).bind(oldName).first();
   if (linkMeta) {
     await env.DB.prepare(`DELETE FROM folder_share_meta WHERE folder = ?`).bind(oldName).run();
@@ -627,7 +634,6 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
       .bind(newSub, row.token, row.password_hash, row.expires_at).run();
   }
 
-  // 更新files表中的folder路径（只更新已完成文件）
   const files = await env.DB.prepare(
     `SELECT id, key, folder FROM files WHERE (folder = ? OR folder LIKE ?) AND (upload_status = 'done' OR upload_status IS NULL)`
   ).bind(oldName, oldName + '/%').all();
@@ -636,7 +642,6 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
     const newFolder = newName + oldFolder.slice(oldName.length);
     const oldKey = row.key as string;
     const newKey = newFolder === 'root' ? oldKey.split('/').pop()! : newFolder + '/' + oldKey.split('/').pop()!;
-    // 移动R2对象
     const obj = await env.VAULT_BUCKET.get(oldKey);
     if (obj) {
       await env.VAULT_BUCKET.put(newKey, obj.body, {
@@ -650,7 +655,6 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
     ).bind(newFolder, newKey, row.id).run();
   }
 
-  // 更新未完成的临时文件记录（只更新文件夹路径，不移动R2对象）
   await env.DB.prepare(
     `UPDATE files SET folder = ? WHERE folder = ? AND upload_status != 'done'`
   ).bind(newName, oldName).run();
@@ -662,16 +666,13 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
 }
 
 export async function listFolders(_request: Request, env: Env): Promise<Response> {
-  // 获取所有文件夹路径（从folders表）
   const folderRows = await env.DB.prepare(`SELECT path FROM folders`).all();
   const folderSet = new Set<string>(folderRows.results.map(r => r.path as string));
 
-  // 从files表中获取所有不同的folder（可能有一些文件夹没有在folders表中）
   const fileFolders = await env.DB.prepare(`SELECT DISTINCT folder FROM files WHERE folder != 'root'`).all();
   for (const row of fileFolders.results) {
     const folder = row.folder as string;
     folderSet.add(folder);
-    // 添加所有父路径
     const parts = folder.split('/');
     let path = '';
     for (let i = 0; i < parts.length - 1; i++) {
@@ -704,7 +705,7 @@ export async function moveFiles(request: Request, env: Env): Promise<Response> {
     const meta = await getFileById(env, id);
     if (!meta) continue;
     if (meta.folder === targetFolder) continue;
-    if (meta.uploadStatus && meta.uploadStatus !== 'done') continue; // 不能移动未完成的文件
+    if (meta.uploadStatus && meta.uploadStatus !== 'done') continue;
 
     const newKey = targetFolder === 'root' ? meta.name : targetFolder + '/' + meta.name;
 
