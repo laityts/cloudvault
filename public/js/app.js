@@ -138,6 +138,8 @@ function cloudvault() {
       window.addEventListener('upload-complete', (e) => {
         this.showToast(e.detail.name + ' 上传成功', 'success');
         updateUploads();
+        // 清除当前文件夹的缓存并重新加载第一页
+        this.clearCurrentFolderCache();
         this.fetchFiles(false);
         this.fetchStats();
         this.fetchFolders();
@@ -401,6 +403,8 @@ function cloudvault() {
           this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
           this._expandVer++;
           this.showToast('文件夹重命名成功', 'success');
+          // 清除当前文件夹缓存并重新加载文件列表
+          this.clearCurrentFolderCache();
           await this.fetchFiles(false);
         } else { this.showToast('重命名失败', 'error'); }
       } catch { this.showToast('重命名失败', 'error'); }
@@ -435,6 +439,8 @@ function cloudvault() {
           if (data.deletedSubfolders > 0) parts.push(data.deletedSubfolders + ' 个子文件夹' + (data.deletedSubfolders > 1 ? '' : ''));
           var msg = '文件夹已删除' + (parts.length ? ' — 已移除 ' + parts.join(' 和 ') : '');
           this.showToast(msg, 'success');
+          // 清除当前文件夹缓存并重新加载文件列表
+          this.clearCurrentFolderCache();
           await this.fetchFiles(false);
         } else { this.showToast('删除失败', 'error'); }
       } catch { this.showToast('删除失败', 'error'); }
@@ -461,6 +467,8 @@ function cloudvault() {
         if (res && res.ok) {
           const data = await res.json();
           this.showToast(data.moved + ' 个文件已移动', 'success');
+          // 清除当前文件夹缓存并重新加载
+          this.clearCurrentFolderCache();
           await Promise.all([this.fetchFiles(false), this.fetchFolders()]);
         } else { this.showToast('移动失败', 'error'); }
       } catch { this.showToast('移动失败', 'error'); }
@@ -470,6 +478,16 @@ function cloudvault() {
       const res = await fetch(url, { credentials: 'same-origin', ...opts });
       if (res.status === 401) { window.location.href = '/login'; return null; }
       return res;
+    },
+
+    // 清除当前文件夹和搜索条件下的所有缓存
+    clearCurrentFolderCache() {
+      const cacheKeyPrefix = `files_${this.currentFolder}_${this.searchQuery}`;
+      Object.keys(this.cache).forEach(key => {
+        if (key.startsWith(cacheKeyPrefix)) {
+          delete this.cache[key];
+        }
+      });
     },
 
     async fetchFiles(append = false) {
@@ -647,6 +665,8 @@ function cloudvault() {
           this.clearSelection();
           this.showToast(ids.length + ' 个文件已删除', 'success');
           this.fetchStats();
+          // 清除当前文件夹缓存（可选，但确保下次加载时数据正确）
+          this.clearCurrentFolderCache();
         } else {
           this.showToast('删除文件失败', 'error');
         }
@@ -671,6 +691,9 @@ function cloudvault() {
         if (res && res.ok) {
           file.name = newName.trim();
           this.showToast('文件重命名成功', 'success');
+          // 清除当前文件夹缓存并重新加载
+          this.clearCurrentFolderCache();
+          this.fetchFiles(false);
         } else { this.showToast('重命名失败', 'error'); }
       } catch { this.showToast('重命名失败', 'error'); }
     },
@@ -704,6 +727,9 @@ function cloudvault() {
           }
           this._expandVer++;
           this.showToast('文件夹创建成功', 'success');
+          // 清除当前文件夹缓存并重新加载文件列表
+          this.clearCurrentFolderCache();
+          this.fetchFiles(false);
         } else { this.showToast('创建文件夹失败', 'error'); }
       } catch { this.showToast('创建文件夹失败', 'error'); }
     },
@@ -1062,6 +1088,7 @@ function cloudvault() {
       }, 3000);
     },
 
+    // ========== 分享管理相关方法 ==========
     openSharesModal() {
       this.sharesModal.show = true;
       this.sharesModal.tab = 'files';
@@ -1120,6 +1147,7 @@ function cloudvault() {
       }
     },
 
+    // ========== 上传控制相关方法 ==========
     pauseUpload(id) {
       window.UploadManager.pauseUpload(id);
     },
@@ -1163,6 +1191,7 @@ function cloudvault() {
       }));
     },
 
+    // ========== 格式化方法 ==========
     formatBytes(bytes) {
       if (!bytes || bytes === 0) return '0 B';
       const k = 1024;
