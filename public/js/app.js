@@ -158,6 +158,14 @@ function cloudvault() {
       });
     },
 
+    // 新增批量控制方法
+    pauseAllUploads() {
+      window.UploadManager.pauseAllUploads();
+    },
+    cancelAllUploads() {
+      window.UploadManager.cancelAllUploads();
+    },
+
     setupTreeEvents() {
       const sidebar = document.querySelector('.sidebar');
       if (!sidebar) return;

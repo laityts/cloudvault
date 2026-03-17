@@ -660,11 +660,18 @@
   <!-- 提示容器 -->
   <div class="toast-container" id="toast-container"></div>
 
-  <!-- 上传面板（悬浮面板） -->
+  <!-- 上传面板（悬浮面板） - 已修改头部 -->
   <div x-show="uploads.length > 0" class="upload-panel">
     <div class="flex items-center justify-between px-4 py-3 border-b" style="border-color:var(--border)">
-      <span class="text-sm font-medium" x-text="'正在上传 ' + uploads.filter(u => u.status === 'uploading').length + ' / ' + uploads.length"></span>
-      <button @click="clearCompletedUploads()" class="text-xs" style="color:var(--text-muted)">清除已完成</button>
+      <div class="flex gap-2 text-sm font-medium">
+        <span x-text="'已完成 ' + uploads.filter(u => u.status === 'done').length + ' / ' + uploads.length"></span>
+        <span class="text-xs" style="color:var(--text-muted)" x-text="'上传中 ' + uploads.filter(u => u.status === 'uploading').length"></span>
+      </div>
+      <div class="flex gap-2">
+        <button @click="pauseAllUploads()" class="text-xs" style="color:var(--text-muted)">暂停全部</button>
+        <button @click="cancelAllUploads()" class="text-xs" style="color:var(--text-muted)">取消全部</button>
+        <button @click="clearCompletedUploads()" class="text-xs" style="color:var(--text-muted)">清除已完成</button>
+      </div>
     </div>
     <div class="max-h-48 overflow-y-auto">
       <template x-for="upload in uploads" :key="upload.id">
