@@ -9,9 +9,14 @@ function extractToken(url: URL): string | null {
   return sIdx >= 0 && parts[sIdx + 1] ? parts[sIdx + 1] : null;
 }
 
+// 修改：仅返回已完成上传的文件
 async function getFileByShareToken(token: string, env: Env): Promise<FileMeta | null> {
   const row = await env.DB.prepare(
-    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files WHERE share_token = ?`
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+            share_token as shareToken, share_password as sharePassword, 
+            share_expires_at as shareExpiresAt, downloads 
+     FROM files 
+     WHERE share_token = ? AND (upload_status = 'done' OR upload_status IS NULL)`
   ).bind(token).first<{
     id: string; key: string; name: string; size: number; type: string; folder: string;
     uploadedAt: string; shareToken: string | null; sharePassword: string | null;
@@ -375,9 +380,14 @@ export async function handleCleanDownload(request: Request, env: Env): Promise<R
   return new Response(object.body, { headers });
 }
 
+// 修改：仅返回已完成上传的文件
 async function findFileByPath(env: Env, folder: string, fileName: string): Promise<FileMeta | null> {
   const row = await env.DB.prepare(
-    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files WHERE folder = ? AND name = ?`
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+            share_token as shareToken, share_password as sharePassword, 
+            share_expires_at as shareExpiresAt, downloads 
+     FROM files 
+     WHERE folder = ? AND name = ? AND (upload_status = 'done' OR upload_status IS NULL)`
   ).bind(folder, fileName).first<{
     id: string; key: string; name: string; size: number; type: string; folder: string;
     uploadedAt: string; shareToken: string | null; sharePassword: string | null;
@@ -393,9 +403,14 @@ async function findFileByPath(env: Env, folder: string, fileName: string): Promi
   };
 }
 
+// 辅助函数：通过ID获取文件（也用于内部调用，同样过滤）
 async function getFileById(env: Env, id: string): Promise<FileMeta | null> {
   const row = await env.DB.prepare(
-    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files WHERE id = ?`
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+            share_token as shareToken, share_password as sharePassword, 
+            share_expires_at as shareExpiresAt, downloads 
+     FROM files 
+     WHERE id = ? AND (upload_status = 'done' OR upload_status IS NULL)`
   ).bind(id).first<{
     id: string; key: string; name: string; size: number; type: string; folder: string;
     uploadedAt: string; shareToken: string | null; sharePassword: string | null;

@@ -47,9 +47,14 @@ export function isFolderShared(folderPath: string, sharedFolders: Set<string>, e
   return false;
 }
 
+// 修改：仅返回已完成上传的文件
 async function getFileById(env: Env, id: string): Promise<FileMeta | null> {
   const row = await env.DB.prepare(
-    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files WHERE id = ?`
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+            share_token as shareToken, share_password as sharePassword, 
+            share_expires_at as shareExpiresAt, downloads 
+     FROM files 
+     WHERE id = ? AND (upload_status = 'done' OR upload_status IS NULL)`
   ).bind(id).first<{
     id: string; key: string; name: string; size: number; type: string; folder: string;
     uploadedAt: string; shareToken: string | null; sharePassword: string | null;
@@ -65,9 +70,14 @@ async function getFileById(env: Env, id: string): Promise<FileMeta | null> {
   };
 }
 
+// 修改：仅返回已完成上传的文件
 async function getAllFiles(env: Env): Promise<FileMeta[]> {
   const rows = await env.DB.prepare(
-    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files`
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+            share_token as shareToken, share_password as sharePassword, 
+            share_expires_at as shareExpiresAt, downloads 
+     FROM files 
+     WHERE (upload_status = 'done' OR upload_status IS NULL)`
   ).all();
   return rows.results.map(r => ({
     id: r.id, key: r.key, name: r.name, size: r.size, type: r.type, folder: r.folder,
@@ -271,12 +281,16 @@ export async function resolveFolderShareToken(token: string, env: Env): Promise<
   };
 }
 
+// 修改：仅返回已完成上传的文件
 export async function browseFolderShareLink(folder: string, subpath: string, env: Env): Promise<{ files: Array<{ id: string; name: string; size: number; type: string; folder: string; uploadedAt: string }>; subfolders: string[] }> {
   const browsePath = subpath ? folder + '/' + subpath : folder;
   const prefix = browsePath + '/';
 
+  // 查询当前文件夹下的已完成文件
   const fileRows = await env.DB.prepare(
-    `SELECT id, name, size, type, folder, uploaded_at as uploadedAt FROM files WHERE folder = ?`
+    `SELECT id, name, size, type, folder, uploaded_at as uploadedAt 
+     FROM files 
+     WHERE folder = ? AND (upload_status = 'done' OR upload_status IS NULL)`
   ).bind(browsePath).all();
   const files = fileRows.results.map(r => ({
     id: r.id as string,
@@ -287,8 +301,9 @@ export async function browseFolderShareLink(folder: string, subpath: string, env
     uploadedAt: r.uploadedAt as string,
   })).sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
 
+  // 查询子文件夹（基于已完成文件的folder字段）
   const subRows = await env.DB.prepare(
-    `SELECT DISTINCT folder FROM files WHERE folder LIKE ?`
+    `SELECT DISTINCT folder FROM files WHERE folder LIKE ? AND (upload_status = 'done' OR upload_status IS NULL)`
   ).bind(prefix + '%').all();
   const subfolderSet = new Set<string>();
   for (const row of subRows.results) {
@@ -299,6 +314,7 @@ export async function browseFolderShareLink(folder: string, subpath: string, env
     if (childName) subfolderSet.add(prefix + childName);
   }
 
+  // 从folders表补充子文件夹
   const folderRows = await env.DB.prepare(
     `SELECT path FROM folders WHERE path LIKE ?`
   ).bind(prefix + '%').all();
@@ -317,7 +333,7 @@ export async function listPublicShared(request: Request, env: Env): Promise<Resp
   const settings = await getSettings(env);
   const sharedFolders = await getSharedFolders(env);
   const excludedFolders = await getExcludedFolders(env);
-  const allFiles = await getAllFiles(env);
+  const allFiles = await getAllFiles(env); // 已过滤未完成文件
 
   const visibleFolders = Array.from(sharedFolders).filter(sf => !excludedFolders.has(sf));
 
@@ -367,7 +383,7 @@ export async function browsePublicFolder(request: Request, env: Env): Promise<Re
     return error('Folder not shared', 403);
   }
 
-  const allFiles = await getAllFiles(env);
+  const allFiles = await getAllFiles(env); // 已过滤未完成文件
   const prefix = path + '/';
 
   let folderFiles: Array<{
