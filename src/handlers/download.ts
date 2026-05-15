@@ -1,8 +1,7 @@
-import { Env, FileMeta, KV_PREFIX } from '../utils/types';
-import { error, getPreviewType, fetchAssetHtml, injectBranding } from '../utils/response';
+import { Env, FileMeta } from '../utils/types';
+import { error, getPreviewType, fetchAssetHtml, injectBranding, getMimeType } from '../utils/response';
 import { verifySharePassword, resolveFolderShareToken, browseFolderShareLink, getSharedFolders, getExcludedFolders, isFolderShared } from '../api/share';
 import { getSettings } from '../api/settings';
-import { getMimeType } from '../utils/response';
 
 function extractToken(url: URL): string | null {
   const parts = url.pathname.split('/');
@@ -10,14 +9,32 @@ function extractToken(url: URL): string | null {
   return sIdx >= 0 && parts[sIdx + 1] ? parts[sIdx + 1] : null;
 }
 
+// 修改：仅返回已完成上传的文件
+async function getFileByShareToken(token: string, env: Env): Promise<FileMeta | null> {
+  const row = await env.DB.prepare(
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+            share_token as shareToken, share_password as sharePassword, 
+            share_expires_at as shareExpiresAt, downloads 
+     FROM files 
+     WHERE share_token = ? AND (upload_status = 'done' OR upload_status IS NULL)`
+  ).bind(token).first<{
+    id: string; key: string; name: string; size: number; type: string; folder: string;
+    uploadedAt: string; shareToken: string | null; sharePassword: string | null;
+    shareExpiresAt: string | null; downloads: number;
+  }>();
+  if (!row) return null;
+  return {
+    ...row,
+    uploadedAt: row.uploadedAt,
+    shareToken: row.shareToken,
+    sharePassword: row.sharePassword,
+    shareExpiresAt: row.shareExpiresAt,
+  };
+}
+
 async function resolveShare(token: string, env: Env): Promise<{ meta: FileMeta; expired: boolean } | null> {
-  const fileId = await env.VAULT_KV.get(KV_PREFIX.SHARE + token);
-  if (!fileId) return null;
-
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + fileId);
-  if (!raw) return null;
-
-  const meta: FileMeta = JSON.parse(raw);
+  const meta = await getFileByShareToken(token, env);
+  if (!meta) return null;
   const expired = !!meta.shareExpiresAt && new Date(meta.shareExpiresAt) < new Date();
   return { meta, expired };
 }
@@ -90,10 +107,9 @@ export async function handleFolderShareDownload(request: Request, env: Env): Pro
   const fileId = url.searchParams.get('fileId');
   if (!fileId) return error('fileId required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + fileId);
-  if (!raw) return error('File not found', 404);
+  const meta = await getFileById(env, fileId);
+  if (!meta) return error('File not found', 404);
 
-  const meta: FileMeta = JSON.parse(raw);
   if (!meta.folder.startsWith(folderLink.folder) && meta.folder !== folderLink.folder) {
     return error('File not in shared folder', 403);
   }
@@ -101,8 +117,9 @@ export async function handleFolderShareDownload(request: Request, env: Env): Pro
   const object = await env.VAULT_BUCKET.get(meta.key);
   if (!object) return error('File not found in storage', 404);
 
-  meta.downloads++;
-  await env.VAULT_KV.put(KV_PREFIX.FILE + meta.id, JSON.stringify(meta));
+  await env.DB.prepare(
+    `UPDATE files SET downloads = downloads + 1 WHERE id = ?`
+  ).bind(meta.id).run();
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
@@ -127,10 +144,9 @@ export async function handleFolderSharePreview(request: Request, env: Env): Prom
   const fileId = url.searchParams.get('fileId');
   if (!fileId) return error('fileId required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + fileId);
-  if (!raw) return error('File not found', 404);
+  const meta = await getFileById(env, fileId);
+  if (!meta) return error('File not found', 404);
 
-  const meta: FileMeta = JSON.parse(raw);
   if (!meta.folder.startsWith(folderLink.folder) && meta.folder !== folderLink.folder) {
     return error('File not in shared folder', 403);
   }
@@ -179,8 +195,9 @@ export async function handleShareDownload(request: Request, env: Env): Promise<R
   const object = await env.VAULT_BUCKET.get(result.meta.key);
   if (!object) return error('File not found in storage', 404);
 
-  result.meta.downloads++;
-  await env.VAULT_KV.put(KV_PREFIX.FILE + result.meta.id, JSON.stringify(result.meta));
+  await env.DB.prepare(
+    `UPDATE files SET downloads = downloads + 1 WHERE id = ?`
+  ).bind(result.meta.id).run();
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
@@ -346,8 +363,9 @@ export async function handleCleanDownload(request: Request, env: Env): Promise<R
   const object = await env.VAULT_BUCKET.get(meta.key);
   if (!object) return null;
 
-  meta.downloads++;
-  await env.VAULT_KV.put(KV_PREFIX.FILE + meta.id, JSON.stringify(meta));
+  await env.DB.prepare(
+    `UPDATE files SET downloads = downloads + 1 WHERE id = ?`
+  ).bind(meta.id).run();
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
@@ -362,18 +380,48 @@ export async function handleCleanDownload(request: Request, env: Env): Promise<R
   return new Response(object.body, { headers });
 }
 
+// 修改：仅返回已完成上传的文件
 async function findFileByPath(env: Env, folder: string, fileName: string): Promise<FileMeta | null> {
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: KV_PREFIX.FILE, limit: 1000, cursor });
-    for (const key of result.keys) {
-      const raw = await env.VAULT_KV.get(key.name);
-      if (!raw) continue;
-      const meta: FileMeta = JSON.parse(raw);
-      if (meta.folder === folder && meta.name === fileName) return meta;
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
-  return null;
+  const row = await env.DB.prepare(
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+            share_token as shareToken, share_password as sharePassword, 
+            share_expires_at as shareExpiresAt, downloads 
+     FROM files 
+     WHERE folder = ? AND name = ? AND (upload_status = 'done' OR upload_status IS NULL)`
+  ).bind(folder, fileName).first<{
+    id: string; key: string; name: string; size: number; type: string; folder: string;
+    uploadedAt: string; shareToken: string | null; sharePassword: string | null;
+    shareExpiresAt: string | null; downloads: number;
+  }>();
+  if (!row) return null;
+  return {
+    ...row,
+    uploadedAt: row.uploadedAt,
+    shareToken: row.shareToken,
+    sharePassword: row.sharePassword,
+    shareExpiresAt: row.shareExpiresAt,
+  };
+}
+
+// 辅助函数：通过ID获取文件（也用于内部调用，同样过滤）
+async function getFileById(env: Env, id: string): Promise<FileMeta | null> {
+  const row = await env.DB.prepare(
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
+            share_token as shareToken, share_password as sharePassword, 
+            share_expires_at as shareExpiresAt, downloads 
+     FROM files 
+     WHERE id = ? AND (upload_status = 'done' OR upload_status IS NULL)`
+  ).bind(id).first<{
+    id: string; key: string; name: string; size: number; type: string; folder: string;
+    uploadedAt: string; shareToken: string | null; sharePassword: string | null;
+    shareExpiresAt: string | null; downloads: number;
+  }>();
+  if (!row) return null;
+  return {
+    ...row,
+    uploadedAt: row.uploadedAt,
+    shareToken: row.shareToken,
+    sharePassword: row.sharePassword,
+    shareExpiresAt: row.shareExpiresAt,
+  };
 }

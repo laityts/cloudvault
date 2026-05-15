@@ -1,14 +1,14 @@
 // ─── Environment Bindings ─────────────────────────────────────────────
 export interface Env {
   VAULT_BUCKET: R2Bucket;
-  VAULT_KV: KVNamespace;
+  DB: D1Database;           // 使用D1代替KV
   ASSETS: Fetcher;
   ADMIN_PASSWORD: string;   // wrangler secret
   SESSION_SECRET: string;   // wrangler secret
   ENVIRONMENT: string;
 }
 
-// ─── File Metadata (stored in KV) ─────────────────────────────────────
+// ─── File Metadata (stored in D1) ─────────────────────────────────────
 export interface FileMeta {
   id: string;
   key: string;              // R2 object key (e.g. "photos/sunset.jpg")
@@ -23,13 +23,23 @@ export interface FileMeta {
   downloads: number;
 }
 
-// ─── Share Link Info ──────────────────────────────────────────────────
-export interface ShareInfo {
-  fileId: string;
+// ─── Folder Share Info ───────────────────────────────────────────────
+export interface FolderShare {
+  folder: string;
+  sharedAt: string;
+}
+
+export interface FolderExclude {
+  folder: string;
+  excludedAt: string;
+}
+
+export interface FolderShareLink {
   token: string;
-  createdAt: string;
+  folder: string;
+  passwordHash: string | null;
   expiresAt: string | null;
-  hasPassword: boolean;
+  createdAt: string;
 }
 
 // ─── Session ──────────────────────────────────────────────────────────
@@ -42,7 +52,7 @@ export interface Session {
 // ─── API Response Types ───────────────────────────────────────────────
 export interface FileListResponse {
   files: FileMeta[];
-  cursor: string | null;
+  cursor: string | null;    // 可能不再需要，但保留兼容
   totalFiles: number;
 }
 
@@ -86,15 +96,3 @@ export const DEFAULT_SETTINGS: SiteSettings = {
   siteName: 'CloudVault',
   siteIconUrl: '',
 };
-
-// ─── KV Key Patterns ─────────────────────────────────────────────────
-export const KV_PREFIX = {
-  FILE: 'file:',
-  SHARE: 'share:',
-  FOLDER_SHARE: 'foldershare:',
-  FOLDER_SHARE_EXCLUDE: 'foldershare-exclude:',
-  FOLDER_SHARE_LINK: 'foldersharelink:',
-  SESSION: 'session:',
-  STATS: 'stats:',
-  SETTINGS: 'settings:',
-} as const;

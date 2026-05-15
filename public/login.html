@@ -1,10 +1,14 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="zh-CN" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CloudVault — Login</title>
-  <script>try{var _b=JSON.parse(document.getElementById('branding-data')?.textContent||'{}');if(_b.siteName)document.title=_b.siteName+' — Login'}catch{}</script>
+  <meta name="theme-color" content="#0f172a">
+  <script>try{if(localStorage.getItem('cv-dark')==='false'){document.documentElement.className='light'}}catch{}</script>
+  <title>CloudVault — 登录</title>
+  <script>try{var _b=JSON.parse(document.getElementById('branding-data')?.textContent||'{}');if(_b.siteName)document.title=_b.siteName+' — 登录'}catch{}</script>
+  <link rel="preconnect" href="https://cdn.tailwindcss.com">
+  <link rel="dns-prefetch" href="//cdn.tailwindcss.com">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -16,55 +20,74 @@
       }
     }
   </script>
-  <style>
-    @keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-    .fade-up { animation: fadeUp 0.5s ease-out; }
-    @keyframes shake { 10%,90% { transform: translateX(-1px); } 20%,80% { transform: translateX(2px); } 30%,50%,70% { transform: translateX(-3px); } 40%,60% { transform: translateX(3px); } }
-    .shake { animation: shake 0.5s ease-in-out; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .spinner { animation: spin 0.6s linear infinite; }
-  </style>
+  <link rel="stylesheet" href="/css/app.css">
 </head>
-<body class="bg-gray-950 min-h-screen flex items-center justify-center p-4">
-  <div class="fade-up w-full max-w-sm">
-    <div class="text-center mb-8">
-      <div id="brand-icon" class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-accent-600/20 mb-4">
-        <svg class="w-8 h-8 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z"/>
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 12.75v3m0 0l-1.5-1.5m1.5 1.5l1.5-1.5"/>
-        </svg>
+<body class="app-shell public-page" style="background:var(--bg-primary);color:var(--text-primary)">
+  <div class="public-shell">
+    <header class="public-topbar">
+      <div class="public-topbar-inner">
+        <div class="public-brand">
+          <div id="brand-icon" class="public-brand-mark">
+            <svg class="w-5 h-5 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z"/>
+            </svg>
+          </div>
+          <div class="public-brand-copy">
+            <span id="brand-name" class="public-brand-title">CloudVault</span>
+            <span class="public-brand-subtitle">后台登录</span>
+          </div>
+        </div>
+        <span class="public-kicker">安全访问</span>
       </div>
-      <h1 id="brand-name" class="text-2xl font-bold text-white">CloudVault</h1>
-      <p class="text-gray-500 text-sm mt-1">Personal Cloud Storage</p>
-    </div>
+    </header>
 
-    <form id="login-form" class="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-2xl">
-      <div id="error-box" class="hidden mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm text-center"></div>
+    <main class="public-main flex items-center justify-center min-h-[calc(100dvh-108px)]">
+      <div class="auth-wrap fade-up">
+        <section class="surface-card auth-panel">
+          <div class="auth-copy">
+            <span class="public-kicker">管理员入口</span>
+            <h1 class="auth-title">进入你的文件控制台</h1>
+            <p class="auth-subtitle">面向移动端重新整理后的登录页，保留最少输入、最清晰反馈，单手操作也不会拥挤。</p>
+          </div>
 
-      <div class="mb-5">
-        <label for="password" class="block text-sm font-medium text-gray-400 mb-2">Password</label>
-        <input
-          type="password"
-          id="password"
-          name="password"
-          placeholder="Enter your password"
-          required
-          autofocus
-          class="w-full px-4 py-3 rounded-xl bg-gray-800 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent transition-all"
-        >
+          <form id="login-form">
+            <div id="error-box" class="auth-error hidden"></div>
+
+            <div class="mb-4">
+              <label for="password" class="block text-sm font-medium mb-2" style="color:var(--text-secondary)">密码</label>
+              <input
+                type="password"
+                id="password"
+                name="password"
+                placeholder="请输入管理员密码"
+                required
+                autofocus
+                class="w-full px-4 py-3 text-base"
+              >
+            </div>
+
+            <button
+              type="submit"
+              id="submit-btn"
+              class="btn-primary w-full text-base"
+            >
+              <span id="btn-text">登录</span>
+              <svg id="btn-spinner" class="hidden spinner w-4 h-4" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+              </svg>
+            </button>
+
+            <div class="auth-helper">
+              <svg class="w-4 h-4 flex-shrink-0 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m6 2.25a9 9 0 11-18 0 9 9 0 0118 0Z"/>
+              </svg>
+              <span>认证成功后会直接进入文件管理后台。</span>
+            </div>
+          </form>
+        </section>
       </div>
-
-      <button
-        type="submit"
-        id="submit-btn"
-        class="w-full py-3 px-4 rounded-xl bg-accent-600 hover:bg-accent-500 text-white font-medium transition-all focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-      >
-        <span id="btn-text">Sign In</span>
-        <svg id="btn-spinner" class="hidden spinner w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-      </button>
-    </form>
-
-    <p class="text-center text-gray-600 text-xs mt-6">Powered by <a href="https://github.com/zqs1qiwan/cloudvault" target="_blank" rel="noopener" class="hover:text-gray-400 underline">zqs1qiwan/CloudVault</a></p>
+    </main>
   </div>
 
   <script>
@@ -74,9 +97,8 @@
         if (b.siteName) document.getElementById('brand-name').textContent = b.siteName;
         if (b.siteIconUrl) {
           var iconEl = document.getElementById('brand-icon');
-          iconEl.innerHTML = '<img src="' + b.siteIconUrl + '" class="w-12 h-12 object-contain">';
+          iconEl.innerHTML = '<img src="' + b.siteIconUrl + '" class="w-full h-full object-contain">';
         }
-        // Note: Do NOT overwrite the "Powered by" attribution footer
       } catch {}
     })();
 
@@ -90,7 +112,7 @@
       e.preventDefault();
       errorBox.classList.add('hidden');
       submitBtn.disabled = true;
-      btnText.textContent = 'Signing in...';
+      btnText.textContent = '登录中...';
       btnSpinner.classList.remove('hidden');
 
       try {
@@ -112,17 +134,17 @@
           return;
         }
 
-        const data = await res.json().catch(() => ({ error: 'Invalid password' }));
-        errorBox.textContent = data.error || 'Invalid password';
+        const data = await res.json().catch(() => ({ error: '密码错误' }));
+        errorBox.textContent = data.error || '密码错误';
         errorBox.classList.remove('hidden');
         form.classList.add('shake');
         setTimeout(() => form.classList.remove('shake'), 500);
       } catch {
-        errorBox.textContent = 'Connection error. Please try again.';
+        errorBox.textContent = '连接错误，请重试。';
         errorBox.classList.remove('hidden');
       } finally {
         submitBtn.disabled = false;
-        btnText.textContent = 'Sign In';
+        btnText.textContent = '登录';
         btnSpinner.classList.add('hidden');
       }
     });

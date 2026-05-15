@@ -1,13 +1,16 @@
-import { Env, SiteSettings, DEFAULT_SETTINGS, KV_PREFIX } from '../utils/types';
+import { Env, SiteSettings, DEFAULT_SETTINGS } from '../utils/types';
 import { json, error } from '../utils/response';
 
-const SETTINGS_KEY = KV_PREFIX.SETTINGS + 'site';
+const SETTINGS_KEY = 'site';
 
 export async function getSettings(env: Env): Promise<SiteSettings> {
-  const raw = await env.VAULT_KV.get(SETTINGS_KEY);
-  if (!raw) return { ...DEFAULT_SETTINGS };
+  const row = await env.DB.prepare(
+    `SELECT value FROM settings WHERE key = ?`
+  ).bind(SETTINGS_KEY).first<{ value: string }>();
+  if (!row) return { ...DEFAULT_SETTINGS };
   try {
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    const parsed = JSON.parse(row.value);
+    return { ...DEFAULT_SETTINGS, ...parsed };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
@@ -34,6 +37,9 @@ export async function handlePutSettings(request: Request, env: Env): Promise<Res
     current.siteIconUrl = body.siteIconUrl.trim().slice(0, 500);
   }
 
-  await env.VAULT_KV.put(SETTINGS_KEY, JSON.stringify(current));
+  await env.DB.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).bind(SETTINGS_KEY, JSON.stringify(current)).run();
+
   return json(current);
 }

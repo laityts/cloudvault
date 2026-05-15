@@ -1,10 +1,14 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="zh-CN" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>404 — Page Not Found</title>
+  <meta name="theme-color" content="#0f172a">
+  <script>try{if(localStorage.getItem('cv-dark')==='false'){document.documentElement.className='light'}}catch{}</script>
+  <title>404 — 页面未找到</title>
   <script>try{var _b=JSON.parse(document.getElementById('branding-data')?.textContent||'{}');if(_b.siteName)document.title='404 — '+_b.siteName}catch{}</script>
+  <link rel="preconnect" href="https://cdn.tailwindcss.com">
+  <link rel="dns-prefetch" href="//cdn.tailwindcss.com">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -12,33 +16,45 @@
       theme: { extend: { colors: { accent: {50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8',800:'#1e40af',900:'#1e3a8a'} } } }
     }
   </script>
+  <link rel="stylesheet" href="/css/app.css">
 </head>
-<body class="bg-gray-950 min-h-screen flex flex-col">
+<body class="app-shell public-page" style="background:var(--bg-primary);color:var(--text-primary)">
+  <div class="public-shell">
+    <header class="public-topbar">
+      <div class="public-topbar-inner">
+        <a href="/" class="public-brand">
+          <div id="brand-icon" class="public-brand-mark">
+            <svg class="w-5 h-5 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z"/>
+            </svg>
+          </div>
+          <div class="public-brand-copy">
+            <span id="brand-name" class="public-brand-title">CloudVault</span>
+            <span class="public-brand-subtitle">页面未找到</span>
+          </div>
+        </a>
+        <span class="public-kicker">404</span>
+      </div>
+    </header>
 
-  <header class="border-b border-gray-800 px-4 py-3">
-    <div class="max-w-5xl mx-auto flex items-center gap-2">
-      <a href="/" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
-        <div id="brand-icon" class="w-7 h-7 rounded-lg flex items-center justify-center bg-accent-600/20">
-          <svg class="w-4 h-4 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z"/></svg>
-        </div>
-        <span id="brand-name" class="font-semibold text-sm text-white">CloudVault</span>
-      </a>
-    </div>
-  </header>
-
-  <main class="flex-1 flex items-center justify-center px-4">
-    <div class="text-center">
-      <p class="text-7xl font-bold text-gray-700 mb-2">404</p>
-      <p class="text-lg font-medium text-gray-400 mb-1">Page not found</p>
-      <p class="text-sm text-gray-600 mb-8">The page you're looking for doesn't exist or has been moved.</p>
-      <a href="/" class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-accent-600 hover:bg-accent-700 text-white text-sm font-medium transition-colors">
-        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
-        Back to Home
-      </a>
-    </div>
-  </main>
-
-  <footer class="text-center py-4 text-xs text-gray-600">Powered by <a href="https://github.com/zqs1qiwan/cloudvault" target="_blank" rel="noopener" class="hover:text-gray-400 underline">zqs1qiwan/CloudVault</a></footer>
+    <main class="public-main flex items-center justify-center min-h-[calc(100dvh-108px)]">
+      <div class="auth-wrap fade-up">
+        <section class="surface-card public-error-card">
+          <p class="error-code">404</p>
+          <h1 class="auth-title mt-4">这条路径不存在</h1>
+          <p class="auth-subtitle mt-3">页面可能被移动、分享链接已失效，或者地址本身有误。移动端会优先保留最直接的回退操作。</p>
+          <div class="mt-6 flex items-center justify-center">
+            <a href="/" class="btn-primary text-sm">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"/>
+              </svg>
+              返回首页
+            </a>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
 
   <script>
     (function() {
@@ -47,8 +63,7 @@
         if (b.siteName) document.getElementById('brand-name').textContent = b.siteName;
         if (b.siteIconUrl) {
           var iconEl = document.getElementById('brand-icon');
-          iconEl.innerHTML = '<img src="' + b.siteIconUrl + '" class="w-full h-full object-contain" onerror="this.parentElement.innerHTML=\'<svg class=\\\'w-4 h-4 text-accent-400\\\' fill=\\\'none\\\' viewBox=\\\'0 0 24 24\\\' stroke=\\\'currentColor\\\' stroke-width=\\\'2\\\'><path stroke-linecap=\\\'round\\\' stroke-linejoin=\\\'round\\\' d=\\\'M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z\\\'/></svg>\'">';
-          iconEl.classList.add('overflow-hidden');
+          iconEl.innerHTML = '<img src="' + b.siteIconUrl + '" class="w-full h-full object-contain">';
         }
       } catch {}
     })();

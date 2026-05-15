@@ -1,6 +1,6 @@
 {
   "name": "cloudvault",
-  "account_id": "0900cf790220d543f4a1b7b8a0e13a0f",
+  "account_id": "1e1608c0c2881e609398b115463574d1",
   "main": "src/index.ts",
   "compatibility_date": "2026-02-18",
   "compatibility_flags": ["nodejs_compat"],
@@ -13,13 +13,14 @@
   "r2_buckets": [
     {
       "binding": "VAULT_BUCKET",
-      "bucket_name": "cloudvault-files"
+      "bucket_name": "cloudvault"
     }
   ],
-  "kv_namespaces": [
+  "d1_databases": [
     {
-      "binding": "VAULT_KV",
-      "id": "dcbf16f1846c4aa19a53106ef6f6f1ed"
+      "binding": "DB",
+      "database_name": "cloudvault",
+      "database_id": "ca0fccc4-72aa-447d-91da-19597df6e825"
     }
   ],
   "observability": {
@@ -27,6 +28,8 @@
     "head_sampling_rate": 1
   },
   "vars": {
-    "ENVIRONMENT": "production"
+    "ENVIRONMENT": "production",
+    "SESSION_SECRET": "7ee5dab3c9a556c1cd73062f457a0f93b8b44995f3d0711e7b79df503e43b21b",
+    "ADMIN_PASSWORD": "admin"
   }
 }

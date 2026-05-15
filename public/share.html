@@ -1,10 +1,14 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="zh-CN" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CloudVault — Shared File</title>
-  <script>try{var _b=JSON.parse(document.getElementById('branding-data')?.textContent||'{}');if(_b.siteName)document.title=_b.siteName+' — Shared File'}catch{}</script>
+  <meta name="theme-color" content="#0f172a">
+  <script>try{if(localStorage.getItem('cv-dark')==='false'){document.documentElement.className='light'}}catch{}</script>
+  <title>CloudVault — 分享的文件</title>
+  <script>try{var _b=JSON.parse(document.getElementById('branding-data')?.textContent||'{}');if(_b.siteName)document.title=_b.siteName+' — 分享的文件'}catch{}</script>
+  <link rel="preconnect" href="https://cdn.tailwindcss.com">
+  <link rel="dns-prefetch" href="//cdn.tailwindcss.com">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -12,110 +16,126 @@
       theme: { extend: { colors: { accent: {50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8',800:'#1e40af',900:'#1e3a8a'} } } }
     }
   </script>
-  <style>
-    @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-    .fade-up { animation: fadeUp 0.4s ease-out; }
-    .preview-container { background: #0a0a0f; border-radius: 12px; overflow: hidden; max-height: 70vh; display: flex; align-items: center; justify-content: center; }
-    .preview-container img { max-width: 100%; max-height: 70vh; object-fit: contain; }
-    .preview-container video, .preview-container audio { width: 100%; max-height: 70vh; }
-    .preview-container iframe { width: 100%; height: 70vh; border: none; }
-    .preview-container pre { width: 100%; max-height: 70vh; overflow: auto; padding: 20px; margin: 0; font-size: 13px; line-height: 1.6; color: #e5e7eb; background: #111827; }
-    .copy-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #1e40af; color: white; padding: 10px 20px; border-radius: 10px; font-size: 14px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
-    .copy-toast.show { opacity: 1; }
-  </style>
+  <link rel="stylesheet" href="/css/app.css">
 </head>
-<body class="bg-gray-950 min-h-screen flex flex-col">
+<body class="app-shell public-page share-page" style="background:var(--bg-primary);color:var(--text-primary)">
   <script id="file-data" type="application/json">{}</script>
 
-  <header class="border-b border-gray-800 px-4 py-3">
-    <div class="max-w-4xl mx-auto flex items-center gap-2">
-      <div id="brand-icon" class="w-7 h-7 rounded-lg flex items-center justify-center bg-accent-600/20">
-        <svg class="w-4 h-4 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z"/></svg>
-      </div>
-      <span id="brand-name" class="font-semibold text-sm text-white">CloudVault</span>
-    </div>
-  </header>
-
-  <main class="flex-1 flex items-start justify-center p-4 pt-8">
-    <div class="fade-up w-full max-w-4xl">
-
-      <div id="password-gate" class="hidden max-w-sm mx-auto">
-        <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6 text-center">
-          <svg class="w-12 h-12 mx-auto mb-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
-          <h2 class="text-lg font-semibold text-white mb-1">Password Protected</h2>
-          <p class="text-sm text-gray-500 mb-4">Enter the password to access this file</p>
-          <form id="password-form" method="POST">
-            <input type="password" name="password" placeholder="Password" required autofocus class="w-full px-4 py-3 rounded-xl bg-gray-800 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent-500 mb-3">
-            <div id="password-error" class="hidden text-red-400 text-sm mb-3"></div>
-            <button type="submit" class="w-full py-3 rounded-xl bg-accent-600 hover:bg-accent-500 text-white font-medium transition-all">Unlock</button>
-          </form>
+  <div class="public-shell">
+    <header class="public-topbar">
+      <div class="public-topbar-inner">
+        <div class="public-brand">
+          <div id="brand-icon" class="public-brand-mark">
+            <svg class="w-5 h-5 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z"/>
+            </svg>
+          </div>
+          <div class="public-brand-copy">
+            <span id="brand-name" class="public-brand-title">CloudVault</span>
+            <span class="public-brand-subtitle">分享内容</span>
+          </div>
         </div>
+        <span class="public-kicker">安全分享</span>
       </div>
+    </header>
 
-      <div id="file-view" class="hidden">
-        <div id="preview-area" class="preview-container mb-6"></div>
+    <main class="public-main">
+      <div class="fade-up w-full">
+        <div id="password-gate" class="hidden auth-wrap">
+          <section class="surface-card auth-panel">
+            <div class="auth-copy">
+              <span class="public-kicker">密码保护</span>
+              <h2 class="auth-title text-[2rem]">输入访问密码</h2>
+              <p class="auth-subtitle">该分享内容已开启访问保护，请先验证密码后继续查看。</p>
+            </div>
 
-        <div class="bg-gray-900 border border-gray-800 rounded-2xl p-5">
-          <div class="flex items-start gap-4">
-            <div class="w-12 h-12 rounded-xl bg-gray-800 flex items-center justify-center text-2xl flex-shrink-0" id="file-icon"></div>
-            <div class="flex-1 min-w-0">
-              <h1 class="text-lg font-semibold text-white truncate" id="file-name"></h1>
-              <div class="flex flex-wrap items-center gap-3 mt-1 text-sm text-gray-500">
-                <span id="file-size"></span>
-                <span>&middot;</span>
-                <span id="file-date"></span>
-                <span>&middot;</span>
-                <span id="file-downloads"></span>
+            <form id="password-form" method="POST">
+              <input type="password" name="password" placeholder="请输入访问密码" required autofocus class="w-full px-4 py-3 text-base mb-3">
+              <div id="password-error" class="auth-error hidden"></div>
+              <button type="submit" class="btn-primary w-full text-base">解锁分享</button>
+            </form>
+          </section>
+        </div>
+
+        <div id="file-view" class="hidden">
+          <div class="public-hero">
+            <section class="surface-card share-detail-card">
+              <div class="share-detail-header">
+                <div class="flex items-start gap-4 min-w-0">
+                  <div id="file-icon" class="share-file-icon"></div>
+                  <div class="min-w-0 flex-1">
+                    <span class="public-kicker">文件分享</span>
+                    <h1 class="public-hero-title text-[2rem] mt-3" id="file-name"></h1>
+                    <div class="share-meta">
+                      <span id="file-size"></span>
+                      <span id="file-date"></span>
+                      <span id="file-downloads"></span>
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
 
-          <div class="flex gap-2 mt-5">
-            <a id="download-btn" class="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-accent-600 hover:bg-accent-500 text-white font-medium transition-all text-center cursor-pointer">
-              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
-              Download
-            </a>
-            <button id="copy-btn" class="px-4 py-3 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 transition-all" title="Copy link">
-              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-2.03a4.5 4.5 0 00-1.242-7.244l-4.5-4.5a4.5 4.5 0 00-6.364 6.364L5.25 9.12"/></svg>
-            </button>
-          </div>
-        </div>
-      </div>
+              <p class="public-hero-subtitle">文件信息与下载操作已按不同设备重新整理，重要内容会优先显示在顶部。</p>
 
-      <div id="folder-view" class="hidden">
-        <div class="bg-gray-900 border border-gray-800 rounded-2xl p-5 mb-4">
-          <div class="flex items-center gap-3 mb-4">
-            <div class="w-10 h-10 rounded-xl bg-gray-800 flex items-center justify-center text-xl flex-shrink-0">📁</div>
-            <div class="flex-1 min-w-0">
-              <h1 class="text-lg font-semibold text-white truncate" id="folder-title"></h1>
-              <div id="folder-breadcrumb" class="flex items-center gap-1 mt-1 text-sm text-gray-500 flex-wrap"></div>
-            </div>
-            <button id="folder-copy-btn" class="px-3 py-2 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 transition-all text-sm" title="Copy link">
-              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-2.03a4.5 4.5 0 00-1.242-7.244l-4.5-4.5a4.5 4.5 0 00-6.364 6.364L5.25 9.12"/></svg>
-            </button>
-          </div>
-
-          <div id="folder-subfolders" class="space-y-1 mb-3"></div>
-
-          <div id="folder-files" class="space-y-1"></div>
-
-          <div id="folder-empty" class="hidden text-center py-8">
-            <p class="text-gray-500 text-sm">This folder is empty</p>
+              <div class="share-actions">
+                <a id="download-btn" class="btn-primary flex-1 text-center cursor-pointer">
+                  <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+                  </svg>
+                  下载文件
+                </a>
+                <button id="copy-btn" class="btn-secondary" title="复制链接">
+                  <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-2.03a4.5 4.5 0 00-1.242-7.244l-4.5-4.5a4.5 4.5 0 00-6.364 6.364L5.25 9.12"/>
+                  </svg>
+                  复制链接
+                </button>
+              </div>
+            </section>
           </div>
         </div>
+
+        <div id="folder-view" class="hidden">
+          <section class="surface-card share-folder-card">
+            <div class="share-folder-header mb-5">
+              <div class="flex items-start gap-4 min-w-0">
+                <div class="share-folder-icon">
+                  <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+                  </svg>
+                </div>
+                <div class="min-w-0 flex-1">
+                  <span class="public-kicker">文件夹分享</span>
+                  <h1 class="public-hero-title text-[2rem] mt-3" id="folder-title"></h1>
+                  <div id="folder-breadcrumb" class="flex flex-wrap items-center gap-2 mt-3"></div>
+                </div>
+              </div>
+              <button id="folder-copy-btn" class="btn-secondary" title="复制链接">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-2.03a4.5 4.5 0 00-1.242-7.244l-4.5-4.5a4.5 4.5 0 00-6.364 6.364L5.25 9.12"/>
+                </svg>
+                复制链接
+              </button>
+            </div>
+
+            <div id="folder-subfolders"></div>
+            <div id="folder-files" class="mt-3"></div>
+
+          </section>
+        </div>
+
+        <div id="error-view" class="hidden auth-wrap">
+          <section class="surface-card public-error-card">
+            <p class="error-code text-[4.5rem]">!</p>
+            <h2 class="auth-title mt-3 text-[2rem]">文件不可用</h2>
+            <p class="auth-subtitle mt-3" id="error-message">此分享链接可能已过期或已被撤销。</p>
+          </section>
+        </div>
       </div>
+    </main>
+  </div>
 
-      <div id="error-view" class="hidden max-w-sm mx-auto text-center">
-        <svg class="w-16 h-16 mx-auto mb-4 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
-        <h2 class="text-xl font-semibold text-white mb-2">File Not Available</h2>
-        <p class="text-gray-500" id="error-message">This share link may have expired or been revoked.</p>
-      </div>
-    </div>
-  </main>
-
-  <footer class="text-center py-4 text-xs text-gray-600">Powered by <a href="https://github.com/zqs1qiwan/cloudvault" target="_blank" rel="noopener" class="hover:text-gray-400 underline">zqs1qiwan/CloudVault</a></footer>
-
-  <div class="copy-toast" id="copy-toast">Link copied to clipboard</div>
+  <div class="copy-toast" id="copy-toast">链接已复制到剪贴板</div>
 
   <script>
     (function() {
@@ -125,7 +145,6 @@
         if (b.siteIconUrl) {
           var iconEl = document.getElementById('brand-icon');
           iconEl.innerHTML = '<img src="' + b.siteIconUrl + '" class="w-full h-full object-contain">';
-          iconEl.classList.add('overflow-hidden');
         }
       } catch {}
     })();

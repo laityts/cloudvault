@@ -1,5 +1,6 @@
 function cloudvault() {
   return {
+    // 原有数据
     files: [],
     folders: [],
     expandedFolders: { '__root__': true },
@@ -18,7 +19,6 @@ function cloudvault() {
     newFolderName: '',
     loading: true,
     uploads: [],
-    sidebarOpen: false,
     ctxMenu: { show: false, x: 0, y: 0, file: null },
     folderCtxMenu: { show: false, x: 0, y: 0, folder: null },
     shareModal: { show: false, file: null, password: '', expiresInDays: 0 },
@@ -30,23 +30,228 @@ function cloudvault() {
     renameFolderModal: { show: false, oldName: '', newName: '' },
     deleteFolderModal: { show: false, folder: '' },
     typeFilter: 'all',
+    categoryMenuOpen: false,
     previewModal: { show: false, file: null, content: '', loading: false },
     lightbox: { show: false, images: [], currentIndex: 0 },
     folderShareLinkModal: { show: false, folder: '', token: null, password: '', expiresInDays: 0, hasPassword: false, expiresAt: null },
 
+    // 分页相关
+    page: 1,
+    limit: 50,
+    hasMore: true,
+    loadingMore: false,
+
+    // 缓存
+    cache: {},
+    cacheTTL: 5 * 60 * 1000,
+
+    // 文件信息模态框
+    fileInfoModal: { show: false, file: null, info: null, loading: false },
+
+    sharesModal: {
+      show: false,
+      tab: 'files',
+      files: [],
+      folders: [],
+      loading: false,
+    },
+
+    showUploadsModal: false,
+    allUploads: [],
+
+    // 用于存储事件处理函数引用，以便移除
+    _uploadEventHandlers: {},
+    _uploadEventsBound: false,
+    _scrollPaginationBound: false,
+    _scrollPaginationFrame: 0,
+    _viewportFillFrame: 0,
+    _remoteAssetPromises: {},
+    _lastMobileScrollTop: 0,
+    mobileToolbarCollapsed: false,
+
+    // 新增计算属性：是否存在等待或上传中的任务
+    get anyPendingOrUploading() {
+      return this.uploads.some(u => u.status === 'pending' || u.status === 'uploading');
+    },
+    // 是否存在暂停的任务
+    get anyPaused() {
+      return this.uploads.some(u => u.status === 'paused');
+    },
+
+    get storageLimitBytes() {
+      return 10 * 1024 * 1024 * 1024;
+    },
+
+    get storageUsagePercent() {
+      if (!this.storageLimitBytes) return 0;
+      return Math.min((this.stats.totalSize / this.storageLimitBytes) * 100, 100);
+    },
+
+    get storageUsageLabel() {
+      return '已使用 ' + this.formatBytes(this.stats.totalSize) + ' / ' + this.formatBytes(this.storageLimitBytes);
+    },
+
+    get categoryOptions() {
+      return [
+        { key: 'images', label: '图片' },
+        { key: 'videos', label: '视频' },
+        { key: 'audio', label: '音频' },
+        { key: 'documents', label: '文档' },
+        { key: 'archives', label: '压缩包' },
+        { key: 'code', label: '代码' },
+        { key: 'other', label: '其他' },
+      ];
+    },
+
+    get categoryCounts() {
+      const counts = { all: 0, images: 0, videos: 0, audio: 0, documents: 0, archives: 0, code: 0, other: 0 };
+      for (const file of Array.isArray(this.files) ? this.files : []) {
+        if (!file || typeof file.name !== 'string') continue;
+        const key = this.getFileCategory(file.type, file.name);
+        counts[key] = (counts[key] || 0) + 1;
+        counts.all += 1;
+      }
+      return counts;
+    },
+
+    getCategoryLabel(key) {
+      const option = this.categoryOptions.find(item => item.key === key);
+      return key === 'all' ? '全部' : (option ? option.label : '全部');
+    },
+
+    getCategoryIcon(key) {
+      const icons = {
+        all: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 7.5h16.5M3.75 12h16.5M3.75 16.5h16.5M6 4.5h12A1.5 1.5 0 0 1 19.5 6v12A1.5 1.5 0 0 1 18 19.5H6A1.5 1.5 0 0 1 4.5 18V6A1.5 1.5 0 0 1 6 4.5Z"/></svg>',
+        images: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 5.25h16.5v13.5H3.75z"/><path stroke-linecap="round" stroke-linejoin="round" d="m7.5 15 2.25-2.25 2.25 2.25 3-3 3 3"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 9h.01"/></svg>',
+        videos: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 7.5A2.25 2.25 0 0 1 6.75 5.25h10.5A2.25 2.25 0 0 1 19.5 7.5v9A2.25 2.25 0 0 1 17.25 18.75H6.75A2.25 2.25 0 0 1 4.5 16.5v-9Z"/><path stroke-linecap="round" stroke-linejoin="round" d="m10.5 9 4.5 3-4.5 3V9Z"/></svg>',
+        audio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 18V6l9-2.25v12"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M18 15a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg>',
+        documents: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 3.75h6l4.5 4.5v12H7.5v-16.5Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 3.75v4.5h4.5"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6M9 15.75h6"/></svg>',
+        archives: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 7.5h15v10.5h-15z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 7.5V4.5h7.5v3"/><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 12h3"/></svg>',
+        code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="m9 18-6-6 6-6"/><path stroke-linecap="round" stroke-linejoin="round" d="m15 6 6 6-6 6"/><path stroke-linecap="round" stroke-linejoin="round" d="m13.5 4.5-3 15"/></svg>',
+        other: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15.75h.01M12 12h.01M12 8.25h.01"/><circle cx="12" cy="12" r="8.25"/></svg>',
+      };
+      return icons[key] || icons.other;
+    },
+
+    getFolderSummary(folder) {
+      const folderCount = Number.isFinite(Number(folder?.folderCount)) ? Number(folder.folderCount) : 0;
+      const fileCount = Number.isFinite(Number(folder?.fileCount)) ? Number(folder.fileCount) : 0;
+      return folderCount + ' 个文件夹 · ' + fileCount + ' 个文件';
+    },
+
+    // MODIFIED: 返回文件夹对象而不是只返回名称
+    get currentSubfolders() {
+      // 搜索结果只展示匹配到的文件，不混入目录项。
+      if (typeof this.searchQuery === 'string' && this.searchQuery.trim()) {
+        return [];
+      }
+
+      if (this.currentFolder === 'root') {
+        // 根目录下的直接子文件夹（不包含路径分隔符的）
+        return this.folders
+          .filter(f => !f.name.includes('/'))
+          .map(f => ({ ...f, shortName: f.name }));
+      } else {
+        const prefix = this.currentFolder + '/';
+        return this.folders
+          .filter(f => f.name.startsWith(prefix) && !f.name.slice(prefix.length).includes('/'))
+          .map(f => ({ ...f, shortName: f.name.slice(prefix.length) }));
+      }
+    },
+
     async init() {
-      if (localStorage.getItem('cv-dark') === 'false') {
+      if (localStorage.getItem('cv-dark') === 'false' || localStorage.getItem('cloudvault-theme') === 'light') {
         this.darkMode = false;
         document.documentElement.classList.remove('dark');
         document.documentElement.classList.add('light');
       }
 
       this.setupDragDrop();
-      this.setupUploadEvents();
+      this.setupUploadEvents(); // 会先检查标志，避免重复
       this.setupTreeEvents();
+      if (typeof this.$nextTick === 'function') {
+        this.$nextTick(() => this.setupScrollPagination());
+      } else {
+        this.setupScrollPagination();
+      }
 
-      await Promise.all([this.fetchFiles(), this.fetchFolders(), this.fetchStats()]);
+      // 页面关闭/刷新时自动暂停所有上传中的任务
+      window.addEventListener('beforeunload', () => {
+        if (window.UploadManager && typeof window.UploadManager.pauseAllUploadingOnUnload === 'function') {
+          window.UploadManager.pauseAllUploadingOnUnload();
+        }
+      });
+
+      const foldersTask = this.fetchFolders();
+      const statsTask = this.fetchStats();
+
+      await this.fetchFiles(false);
+      await Promise.allSettled([foldersTask, statsTask]);
       this.loading = false;
+    },
+
+    setupScrollPagination() {
+      if (this._scrollPaginationBound) return;
+      const container = this.$refs?.scrollContainer;
+      if (!container) return;
+
+      const onScroll = () => {
+        if (this._scrollPaginationFrame) return;
+        this._scrollPaginationFrame = window.requestAnimationFrame(() => {
+          this._scrollPaginationFrame = 0;
+          this.updateMobileToolbarVisibility(container.scrollTop);
+          if (container.scrollTop + container.clientHeight + 220 >= container.scrollHeight) {
+            this.loadMore();
+          }
+        });
+      };
+
+      container.addEventListener('scroll', onScroll, { passive: true });
+      this.updateMobileToolbarVisibility(container.scrollTop);
+      this._scrollPaginationBound = true;
+    },
+
+    // 移动端根据滚动方向折叠顶部工具区，给内容区腾出空间。
+    updateMobileToolbarVisibility(scrollTop) {
+      const top = Number.isFinite(Number(scrollTop)) ? Math.max(Number(scrollTop), 0) : 0;
+      if (window.innerWidth > 768) {
+        this.mobileToolbarCollapsed = false;
+        this._lastMobileScrollTop = top;
+        return;
+      }
+      if (top <= 12) {
+        this.mobileToolbarCollapsed = false;
+        this._lastMobileScrollTop = 0;
+        return;
+      }
+
+      const delta = top - this._lastMobileScrollTop;
+      if (delta > 10) {
+        this.mobileToolbarCollapsed = true;
+      } else if (delta < -10) {
+        this.mobileToolbarCollapsed = false;
+      }
+      this._lastMobileScrollTop = top;
+    },
+
+    queueViewportFillCheck() {
+      if (this._viewportFillFrame) {
+        window.cancelAnimationFrame(this._viewportFillFrame);
+      }
+
+      this._viewportFillFrame = window.requestAnimationFrame(async () => {
+        this._viewportFillFrame = 0;
+        await this.fillViewportIfNeeded(0);
+      });
+    },
+
+    async fillViewportIfNeeded(depth = 0) {
+      if (depth >= 3 || this.loading || this.loadingMore || !this.hasMore) return;
+      const container = this.$refs?.scrollContainer;
+      if (!container) return;
+      if (container.scrollHeight > container.clientHeight + 160) return;
+      await this.fetchFiles(true);
+      await this.fillViewportIfNeeded(depth + 1);
     },
 
     setupDragDrop() {
@@ -70,24 +275,89 @@ function cloudvault() {
     },
 
     setupUploadEvents() {
-      window.addEventListener('upload-progress', () => {
-        this.uploads = [...window.UploadManager.queue.map(q => ({
-          name: q.file.name, progress: q.progress, status: q.status
-        }))];
-      });
-      window.addEventListener('upload-complete', async (e) => {
-        this.uploads = [...window.UploadManager.queue.map(q => ({
-          name: q.file.name, progress: q.progress, status: q.status
-        }))];
-        this.showToast(e.detail.name + ' uploaded', 'success');
-        await Promise.all([this.fetchFiles(), this.fetchStats(), this.fetchFolders()]);
-      });
-      window.addEventListener('upload-error', (e) => {
-        this.uploads = [...window.UploadManager.queue.map(q => ({
-          name: q.file.name, progress: q.progress, status: q.status
-        }))];
-        this.showToast('Failed to upload ' + e.detail.name, 'error');
-      });
+      // 如果已经绑定过，则不再重复绑定
+      if (this._uploadEventsBound) return;
+      if (!window.UploadManager || !Array.isArray(window.UploadManager.queue) || typeof window.UploadManager.getAllItems !== 'function') {
+        return;
+      }
+      this._uploadEventsBound = true;
+
+      // 定义更新函数
+      const updateUploads = () => {
+        this.uploads = window.UploadManager.queue.map(item => ({
+          id: item.id,
+          name: item.name,
+          progress: item.progress,
+          status: item.status,
+          speed: item.speed,
+          eta: item.eta,
+        }));
+        this.allUploads = window.UploadManager.getAllItems().map(item => ({
+          id: item.id,
+          name: item.name,
+          size: item.size,
+          progress: item.progress,
+          status: item.status,
+          speed: item.speed,
+          eta: item.eta,
+          retryCount: item.retryCount,
+          createdAt: item.createdAt,
+          folder: item.folder,
+        }));
+      };
+
+      // 保存处理函数引用
+      this._uploadEventHandlers.updateUploads = updateUploads;
+
+      // 定义带 toast 的事件处理函数并保存引用
+      const completeHandler = (e) => {
+        this.showToast(e.detail.name + ' 上传成功', 'success');
+        updateUploads();
+        this.clearCurrentFolderCache();
+        this.fetchFiles(false);
+        this.fetchStats();
+        this.fetchFolders();
+      };
+      const errorHandler = (e) => {
+        this.showToast('上传 ' + e.detail.name + ' 失败', 'error');
+        updateUploads();
+      };
+      const retryHandler = (e) => {
+        this.showToast(e.detail.name + ' 正在重试 (' + e.detail.retry + '/3)', 'info');
+        updateUploads();
+      };
+      const pausedHandler = (e) => {
+        this.showToast(e.detail.name + ' 已暂停', 'info');
+        updateUploads();
+      };
+
+      this._uploadEventHandlers.complete = completeHandler;
+      this._uploadEventHandlers.error = errorHandler;
+      this._uploadEventHandlers.retry = retryHandler;
+      this._uploadEventHandlers.paused = pausedHandler;
+
+      // 添加新监听
+      window.addEventListener('upload-progress', updateUploads);
+      window.addEventListener('upload-queue-changed', updateUploads);
+      window.addEventListener('upload-queue-loaded', updateUploads);
+      window.addEventListener('upload-complete', completeHandler);
+      window.addEventListener('upload-error', errorHandler);
+      window.addEventListener('upload-retry', retryHandler);
+      window.addEventListener('upload-paused', pausedHandler);
+    },
+
+    // 批量控制方法
+    pauseAllUploads() {
+      if (!window.UploadManager) return;
+      window.UploadManager.pauseAllUploads();
+    },
+    cancelAllUploads() {
+      if (!window.UploadManager) return;
+      window.UploadManager.cancelAllUploads();
+    },
+    resumeAllUploads() {
+      if (!window.UploadManager) return;
+      window.UploadManager.resumeAllUploads();
     },
 
     setupTreeEvents() {
@@ -167,11 +437,11 @@ function cloudvault() {
         const indent = depth * 16;
         let sharedBadge = '';
         if (node.excluded) {
-          sharedBadge = '<span class="folder-share-badge excluded" title="Excluded from share">\u2298</span>';
+          sharedBadge = '<span class="folder-share-badge excluded" title="从分享中排除">\u2298</span>';
         } else if (node.directlyShared) {
-          sharedBadge = '<span class="folder-share-badge guest" title="Guest shared">\uD83D\uDC41</span>';
+          sharedBadge = '<span class="folder-share-badge guest" title="访客分享">\uD83D\uDC41</span>';
         } else if (node.shared) {
-          sharedBadge = '<span class="folder-share-badge inherited" title="Inherited share">\u25CB</span>';
+          sharedBadge = '<span class="folder-share-badge inherited" title="继承分享">\u25CB</span>';
         }
         html += '<div class="sidebar-item tree-item' + (isActive ? ' active' : '') + '" ' +
           'style="padding-left:' + (12 + indent) + 'px" ' +
@@ -210,6 +480,27 @@ function cloudvault() {
       return false;
     },
 
+    getFolderObject(shortName) {
+      const fullPath = this.currentFolder === 'root' ? shortName : this.currentFolder + '/' + shortName;
+      return this.folders.find(f => f.name === fullPath) || { name: fullPath, shared: false, directlyShared: false, excluded: false };
+    },
+
+    getFolderShareStatus(shortName) {
+      const folder = this.getFolderObject(shortName);
+      return { shared: folder.shared, directlyShared: folder.directlyShared, excluded: folder.excluded };
+    },
+
+    openFolderContextMenu(event, shortName) {
+      const folder = this.getFolderObject(shortName);
+      if (!folder) return;
+      const rect = document.body.getBoundingClientRect();
+      let x = event.clientX;
+      let y = event.clientY;
+      if (x + 200 > window.innerWidth) x = window.innerWidth - 200;
+      if (y + 200 > window.innerHeight) y = window.innerHeight - 200;
+      this.folderCtxMenu = { show: true, x, y, folder };
+    },
+
     async toggleFolderShare(folder) {
       this.folderCtxMenu.show = false;
       if (!folder) return;
@@ -239,9 +530,9 @@ function cloudvault() {
           });
           this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
           this._expandVer++;
-          this.showToast(nowShared ? 'Folder shared' : 'Folder unshared', 'success');
-        } else { this.showToast('Failed to toggle folder sharing', 'error'); }
-      } catch { this.showToast('Failed to toggle folder sharing', 'error'); }
+          this.showToast(nowShared ? '文件夹已分享' : '文件夹取消分享', 'success');
+        } else { this.showToast('切换文件夹分享失败', 'error'); }
+      } catch { this.showToast('切换文件夹分享失败', 'error'); }
     },
 
     async toggleFolderExclude(folder) {
@@ -273,9 +564,9 @@ function cloudvault() {
           });
           this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
           this._expandVer++;
-          this.showToast(nowExcluded ? 'Folder excluded from share' : 'Folder included in share', 'success');
-        } else { this.showToast('Failed to toggle folder exclusion', 'error'); }
-      } catch { this.showToast('Failed to toggle folder exclusion', 'error'); }
+          this.showToast(nowExcluded ? '文件夹已从分享中排除' : '文件夹已包含在分享中', 'success');
+        } else { this.showToast('切换文件夹排除状态失败', 'error'); }
+      } catch { this.showToast('切换文件夹排除状态失败', 'error'); }
     },
 
     showRenameFolderModal(folder) {
@@ -313,10 +604,12 @@ function cloudvault() {
           });
           this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
           this._expandVer++;
-          this.showToast('Folder renamed', 'success');
-          await this.fetchFiles();
-        } else { this.showToast('Rename failed', 'error'); }
-      } catch { this.showToast('Rename failed', 'error'); }
+          this.showToast('文件夹重命名成功', 'success');
+          // 清除当前文件夹缓存并重新加载文件列表
+          this.clearCurrentFolderCache();
+          await this.fetchFiles(false);
+        } else { this.showToast('重命名失败', 'error'); }
+      } catch { this.showToast('重命名失败', 'error'); }
     },
 
     showDeleteFolderModal(folder) {
@@ -344,13 +637,15 @@ function cloudvault() {
           this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
           this._expandVer++;
           var parts = [];
-          if (data.deletedFiles > 0) parts.push(data.deletedFiles + ' file' + (data.deletedFiles > 1 ? 's' : ''));
-          if (data.deletedSubfolders > 0) parts.push(data.deletedSubfolders + ' subfolder' + (data.deletedSubfolders > 1 ? 's' : ''));
-          var msg = 'Folder deleted' + (parts.length ? ' — removed ' + parts.join(' and ') : '');
+          if (data.deletedFiles > 0) parts.push(data.deletedFiles + ' 个文件' + (data.deletedFiles > 1 ? '' : ''));
+          if (data.deletedSubfolders > 0) parts.push(data.deletedSubfolders + ' 个子文件夹' + (data.deletedSubfolders > 1 ? '' : ''));
+          var msg = '文件夹已删除' + (parts.length ? ' — 已移除 ' + parts.join(' 和 ') : '');
           this.showToast(msg, 'success');
-          await this.fetchFiles();
-        } else { this.showToast('Delete failed', 'error'); }
-      } catch { this.showToast('Delete failed', 'error'); }
+          // 清除当前文件夹缓存并重新加载文件列表
+          this.clearCurrentFolderCache();
+          await this.fetchFiles(false);
+        } else { this.showToast('删除失败', 'error'); }
+      } catch { this.showToast('删除失败', 'error'); }
     },
 
     showMoveModal(file) {
@@ -373,10 +668,12 @@ function cloudvault() {
         });
         if (res && res.ok) {
           const data = await res.json();
-          this.showToast(data.moved + ' file(s) moved', 'success');
-          await Promise.all([this.fetchFiles(), this.fetchFolders()]);
-        } else { this.showToast('Move failed', 'error'); }
-      } catch { this.showToast('Move failed', 'error'); }
+          this.showToast(data.moved + ' 个文件已移动', 'success');
+          // 清除当前文件夹缓存并重新加载
+          this.clearCurrentFolderCache();
+          await Promise.all([this.fetchFiles(false), this.fetchFolders()]);
+        } else { this.showToast('移动失败', 'error'); }
+      } catch { this.showToast('移动失败', 'error'); }
     },
 
     async apiFetch(url, opts = {}) {
@@ -385,29 +682,145 @@ function cloudvault() {
       return res;
     },
 
-    async fetchFiles() {
-      const params = new URLSearchParams();
-      if (this.currentFolder !== 'root') params.set('folder', this.currentFolder);
-      if (this.searchQuery) params.set('search', this.searchQuery);
-      const res = await this.apiFetch('/api/files?' + params);
-      if (!res) return;
-      const data = await res.json();
-      this.files = data.files || [];
+    // 清除当前文件夹和搜索条件下的所有缓存
+    clearCurrentFolderCache() {
+      const cacheKeyPrefix = `files_${this.currentFolder}_${this.searchQuery}`;
+      Object.keys(this.cache).forEach(key => {
+        if (key.startsWith(cacheKeyPrefix)) {
+          delete this.cache[key];
+        }
+      });
     },
 
+    async fetchFiles(append = false) {
+      if (!append) {
+        this.page = 1;
+        this.hasMore = true;
+        this.files = [];
+        this.loading = true;
+      } else if (!this.hasMore || this.loadingMore) {
+        return;
+      }
+
+      this.loadingMore = append;
+      try {
+        const cacheKey = `files_${this.currentFolder}_${this.searchQuery}_page${this.page}`;
+        const cached = this.cache[cacheKey];
+        const now = Date.now();
+        if (cached && now - cached.timestamp < this.cacheTTL) {
+          if (append) {
+            this.files = [...this.files, ...cached.data.files];
+          } else {
+            this.files = cached.data.files;
+          }
+          this.hasMore = cached.data.hasMore;
+          this.page++;
+          return;
+        }
+
+        const params = new URLSearchParams({
+          folder: this.currentFolder !== 'root' ? this.currentFolder : '',
+          search: this.searchQuery,
+          limit: String(this.limit),
+          offset: String((this.page - 1) * this.limit),
+        });
+        const res = await this.apiFetch('/api/files?' + params);
+        if (!res) return;
+        if (!res.ok) throw new Error('Files API returned ' + res.status);
+
+        const data = await res.json();
+        const files = Array.isArray(data?.files)
+          ? data.files
+            .filter(file => file && typeof file.id === 'string' && typeof file.name === 'string')
+            .map(file => ({
+              id: file.id,
+              key: typeof file.key === 'string' ? file.key : '',
+              name: file.name,
+              size: Number.isFinite(Number(file.size)) ? Number(file.size) : 0,
+              type: typeof file.type === 'string' ? file.type : 'application/octet-stream',
+              folder: typeof file.folder === 'string' && file.folder ? file.folder : 'root',
+              uploadedAt: typeof file.uploadedAt === 'string' ? file.uploadedAt : '',
+              shareToken: typeof file.shareToken === 'string' ? file.shareToken : null,
+              downloads: Number.isFinite(Number(file.downloads)) ? Number(file.downloads) : 0,
+            }))
+          : [];
+        const hasMore = data?.hasMore === true;
+
+        this.cache[cacheKey] = {
+          timestamp: now,
+          data: { files, hasMore },
+        };
+
+        if (append) {
+          this.files = [...this.files, ...files];
+        } else {
+          this.files = files;
+        }
+        this.hasMore = hasMore;
+        if (files.length > 0) this.page++;
+      } catch (error) {
+        console.error('Failed to fetch files:', error);
+        if (!append) {
+          this.files = [];
+          this.showToast('文件列表加载失败，请稍后重试', 'error');
+        }
+      } finally {
+        this.loading = false;
+        this.loadingMore = false;
+        this.queueViewportFillCheck();
+      }
+    },
+
+    loadMore() {
+      if (this.loading || this.loadingMore || !this.hasMore) return;
+      this.fetchFiles(true);
+    },
+
+    // MODIFIED: 处理后端返回的文件夹统计
     async fetchFolders() {
-      const res = await this.apiFetch('/api/folders');
-      if (!res) return;
-      const data = await res.json();
-      const folders = (data.folders || []).map(f => typeof f === 'string' ? { name: f, shared: false, directlyShared: false, excluded: false } : f);
-      this.folders = folders;
-      this._folderShareHash = folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
+      try {
+        const res = await this.apiFetch('/api/folders');
+        if (!res) return;
+        if (!res.ok) throw new Error('Folders API returned ' + res.status);
+
+        const data = await res.json();
+        const rawFolders = Array.isArray(data?.folders) ? data.folders : [];
+        const folders = rawFolders
+          .map(f => typeof f === 'string' ? { name: f } : f)
+          .filter(f => f && typeof f.name === 'string' && f.name)
+          .map(base => ({
+            name: base.name,
+            shared: base.shared === true,
+            directlyShared: base.directlyShared === true,
+            excluded: base.excluded === true,
+            fileCount: Number.isFinite(Number(base.fileCount)) ? Number(base.fileCount) : 0,
+            folderCount: Number.isFinite(Number(base.folderCount)) ? Number(base.folderCount) : 0,
+          }));
+
+        this.folders = folders;
+        this._folderShareHash = folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
+      } catch (error) {
+        console.error('Failed to fetch folders:', error);
+      }
     },
 
     async fetchStats() {
-      const res = await this.apiFetch('/api/stats');
-      if (!res) return;
-      this.stats = await res.json();
+      try {
+        const res = await this.apiFetch('/api/stats');
+        if (!res) return;
+        if (!res.ok) throw new Error('Stats API returned ' + res.status);
+
+        const data = await res.json();
+        this.stats = {
+          totalFiles: Number.isFinite(Number(data?.totalFiles)) ? Number(data.totalFiles) : 0,
+          totalSize: Number.isFinite(Number(data?.totalSize)) ? Number(data.totalSize) : 0,
+          totalDownloads: Number.isFinite(Number(data?.totalDownloads)) ? Number(data.totalDownloads) : 0,
+          recentUploads: Array.isArray(data?.recentUploads) ? data.recentUploads : [],
+          topDownloaded: Array.isArray(data?.topDownloaded) ? data.topDownloaded : [],
+        };
+      } catch (error) {
+        console.error('Failed to fetch stats:', error);
+      }
     },
 
     get filteredFiles() {
@@ -434,12 +847,12 @@ function cloudvault() {
       if (this._lastNav && now - this._lastNav < 50) return;
       this._lastNav = now;
       const wasOnSameFolder = this.currentFolder === folder;
+      this.mobileToolbarCollapsed = false;
+      this._lastMobileScrollTop = 0;
       this.currentFolder = folder;
       this.searchQuery = '';
       this.clearSelection();
-      this.sidebarOpen = false;
       if (folder !== 'root') {
-        // Always expand the target folder and all parents on navigation
         const parts = folder.split('/');
         let path = '';
         for (let i = 0; i < parts.length; i++) {
@@ -448,7 +861,12 @@ function cloudvault() {
         }
         this._expandVer++;
       }
-      if (!wasOnSameFolder) this.fetchFiles();
+      if (!wasOnSameFolder) {
+        this.page = 1;
+        this.hasMore = true;
+        this.files = [];
+        this.fetchFiles(false);
+      }
     },
 
     toggleSort(field) {
@@ -506,12 +924,14 @@ function cloudvault() {
         if (res && res.ok) {
           this.files = this.files.filter(f => !ids.includes(f.id));
           this.clearSelection();
-          this.showToast(ids.length + ' file(s) deleted', 'success');
+          this.showToast(ids.length + ' 个文件已删除', 'success');
           this.fetchStats();
+          // 清除当前文件夹缓存（可选，但确保下次加载时数据正确）
+          this.clearCurrentFolderCache();
         } else {
-          this.showToast('Failed to delete files', 'error');
+          this.showToast('删除文件失败', 'error');
         }
-      } catch { this.showToast('Failed to delete files', 'error'); }
+      } catch { this.showToast('删除文件失败', 'error'); }
     },
 
     showRenameModal(file) {
@@ -531,9 +951,12 @@ function cloudvault() {
         });
         if (res && res.ok) {
           file.name = newName.trim();
-          this.showToast('File renamed', 'success');
-        } else { this.showToast('Rename failed', 'error'); }
-      } catch { this.showToast('Rename failed', 'error'); }
+          this.showToast('文件重命名成功', 'success');
+          // 清除当前文件夹缓存并重新加载
+          this.clearCurrentFolderCache();
+          this.fetchFiles(false);
+        } else { this.showToast('重命名失败', 'error'); }
+      } catch { this.showToast('重命名失败', 'error'); }
     },
 
     async createFolder() {
@@ -552,7 +975,7 @@ function cloudvault() {
           if (!this.folders.find(f => f.name === fullName)) {
             const parentFolder = this.currentFolder !== 'root' ? this.folders.find(f => f.name === this.currentFolder) : null;
             const inherited = parentFolder ? (parentFolder.shared || parentFolder.directlyShared) && !parentFolder.excluded : false;
-            this.folders = [...this.folders, { name: fullName, shared: inherited, directlyShared: false, excluded: false }];
+            this.folders = [...this.folders, { name: fullName, shared: inherited, directlyShared: false, excluded: false, fileCount: 0, folderCount: 0 }];
           }
           this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
           if (this.currentFolder !== 'root') {
@@ -564,9 +987,12 @@ function cloudvault() {
             }
           }
           this._expandVer++;
-          this.showToast('Folder created', 'success');
-        } else { this.showToast('Failed to create folder', 'error'); }
-      } catch { this.showToast('Failed to create folder', 'error'); }
+          this.showToast('文件夹创建成功', 'success');
+          // 清除当前文件夹缓存并重新加载文件列表
+          this.clearCurrentFolderCache();
+          this.fetchFiles(false);
+        } else { this.showToast('创建文件夹失败', 'error'); }
+      } catch { this.showToast('创建文件夹失败', 'error'); }
     },
 
     shareFile(file) {
@@ -589,10 +1015,10 @@ function cloudvault() {
           const data = await res.json();
           file.shareToken = data.token;
           this.shareModal.file = file;
-          this.showToast('Share link created', 'success');
+          this.showToast('分享链接已创建', 'success');
           this.copyShareLink(data.token);
-        } else { this.showToast('Failed to create share link', 'error'); }
-      } catch { this.showToast('Failed to create share link', 'error'); }
+        } else { this.showToast('创建分享链接失败', 'error'); }
+      } catch { this.showToast('创建分享链接失败', 'error'); }
     },
 
     async revokeShare(fileId) {
@@ -602,9 +1028,9 @@ function cloudvault() {
           const file = this.files.find(f => f.id === fileId);
           if (file) file.shareToken = null;
           this.shareModal.show = false;
-          this.showToast('Share link revoked', 'success');
-        } else { this.showToast('Failed to revoke link', 'error'); }
-      } catch { this.showToast('Failed to revoke link', 'error'); }
+          this.showToast('分享链接已撤销', 'success');
+        } else { this.showToast('撤销链接失败', 'error'); }
+      } catch { this.showToast('撤销链接失败', 'error'); }
     },
 
     async shareFolderLink(folder) {
@@ -640,10 +1066,10 @@ function cloudvault() {
           this.folderShareLinkModal.token = data.token;
           this.folderShareLinkModal.hasPassword = data.hasPassword;
           this.folderShareLinkModal.expiresAt = data.expiresAt;
-          this.showToast('Folder share link created', 'success');
+          this.showToast('文件夹分享链接已创建', 'success');
           this.copyShareLink(data.token);
-        } else { this.showToast('Failed to create folder share link', 'error'); }
-      } catch { this.showToast('Failed to create folder share link', 'error'); }
+        } else { this.showToast('创建文件夹分享链接失败', 'error'); }
+      } catch { this.showToast('创建文件夹分享链接失败', 'error'); }
     },
 
     async revokeFolderShareLink(folder) {
@@ -651,17 +1077,34 @@ function cloudvault() {
         var res = await this.apiFetch('/api/folder-share-link/' + encodeURIComponent(folder), { method: 'DELETE' });
         if (res && res.ok) {
           this.folderShareLinkModal.show = false;
-          this.showToast('Folder share link revoked', 'success');
-        } else { this.showToast('Failed to revoke folder share link', 'error'); }
-      } catch { this.showToast('Failed to revoke folder share link', 'error'); }
+          this.showToast('文件夹分享链接已撤销', 'success');
+        } else { this.showToast('撤销文件夹分享链接失败', 'error'); }
+      } catch { this.showToast('撤销文件夹分享链接失败', 'error'); }
     },
 
     copyShareLink(token) {
       const url = window.location.origin + '/s/' + token;
-      navigator.clipboard.writeText(url).then(() => this.showToast('Link copied to clipboard', 'info'));
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(url).then(() => this.showToast('链接已复制到剪贴板', 'info'));
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = url;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+          document.execCommand('copy');
+          this.showToast('链接已复制到剪贴板', 'info');
+        } catch (e) {
+          this.showToast('复制失败，请手动复制', 'error');
+        }
+        document.body.removeChild(textarea);
+      }
     },
 
     downloadFile(file) {
+      if (!file || typeof file.id !== 'string') return;
       this.ctxMenu.show = false;
       if (file.shareToken) {
         window.open('/s/' + file.shareToken + '/download', '_blank');
@@ -670,7 +1113,100 @@ function cloudvault() {
       }
     },
 
+    async showFileInfo(file) {
+      this.ctxMenu.show = false;
+      this.fileInfoModal = { show: true, file, info: null, loading: true };
+      try {
+        const res = await this.apiFetch('/api/files/' + file.id + '/info');
+        if (res && res.ok) {
+          this.fileInfoModal.info = await res.json();
+        } else {
+          this.showToast('获取文件信息失败', 'error');
+          this.fileInfoModal.show = false;
+        }
+      } catch {
+        this.showToast('获取文件信息失败', 'error');
+        this.fileInfoModal.show = false;
+      } finally {
+        this.fileInfoModal.loading = false;
+      }
+    },
+
+    loadRemoteScript(key, url) {
+      if (this._remoteAssetPromises[key]) {
+        return this._remoteAssetPromises[key];
+      }
+
+      this._remoteAssetPromises[key] = new Promise((resolve, reject) => {
+        const existing = document.querySelector(`script[data-remote-key="${key}"]`);
+        if (existing) {
+          if (existing.dataset.loaded === 'true') {
+            resolve();
+            return;
+          }
+          existing.addEventListener('load', () => resolve(), { once: true });
+          existing.addEventListener('error', () => reject(new Error('Script load failed: ' + key)), { once: true });
+          return;
+        }
+
+        const script = document.createElement('script');
+        script.src = url;
+        script.async = true;
+        script.dataset.remoteKey = key;
+        script.onload = () => {
+          script.dataset.loaded = 'true';
+          resolve();
+        };
+        script.onerror = () => reject(new Error('Script load failed: ' + url));
+        document.head.appendChild(script);
+      }).catch(error => {
+        delete this._remoteAssetPromises[key];
+        throw error;
+      });
+
+      return this._remoteAssetPromises[key];
+    },
+
+    ensurePreviewTheme() {
+      if (document.querySelector('link[data-preview-theme="prism"]')) return;
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = 'https://cdn.jsdelivr.net/npm/prismjs@1/themes/prism-tomorrow.min.css';
+      link.dataset.previewTheme = 'prism';
+      document.head.appendChild(link);
+    },
+
+    async ensureMarkedReady() {
+      try {
+        await this.loadRemoteScript('marked', 'https://cdn.jsdelivr.net/npm/marked@12/marked.min.js');
+        return typeof window.marked !== 'undefined' && typeof window.marked.parse === 'function';
+      } catch (error) {
+        console.error('Failed to load marked:', error);
+        return false;
+      }
+    },
+
+    async ensurePrismReady() {
+      this.ensurePreviewTheme();
+      try {
+        await this.loadRemoteScript('prism-core', 'https://cdn.jsdelivr.net/npm/prismjs@1/prism.min.js');
+        await this.loadRemoteScript('prism-autoloader', 'https://cdn.jsdelivr.net/npm/prismjs@1/plugins/autoloader/prism-autoloader.min.js');
+        if (window.Prism?.plugins?.autoloader) {
+          window.Prism.plugins.autoloader.languages_path = 'https://cdn.jsdelivr.net/npm/prismjs@1/components/';
+        }
+        return typeof window.Prism !== 'undefined';
+      } catch (error) {
+        console.error('Failed to load Prism:', error);
+        return false;
+      }
+    },
+
     async previewFile(file) {
+      if (!file || typeof file.id !== 'string' || typeof file.name !== 'string' || typeof file.type !== 'string') {
+        this.showToast('文件数据异常，无法预览', 'error');
+        return;
+      }
+
       if (file.type.startsWith('image/')) {
         this.openLightbox(file);
         return;
@@ -681,10 +1217,10 @@ function cloudvault() {
 
       try {
         if (file.type.startsWith('video/')) {
-          this.previewModal.content = '<video controls autoplay class="preview-media"><source src="' + previewUrl + '" type="' + this._escAttr(file.type) + '">Your browser does not support video.</video>';
+          this.previewModal.content = '<video controls playsinline preload="metadata" class="preview-media"><source src="' + previewUrl + '" type="' + this._escAttr(file.type) + '">您的浏览器不支持视频播放。</video>';
           this.previewModal.loading = false;
         } else if (file.type.startsWith('audio/')) {
-          this.previewModal.content = '<div class="preview-audio-wrap"><span class="text-6xl mb-4">\uD83C\uDFB5</span><audio controls autoplay class="w-full"><source src="' + previewUrl + '" type="' + this._escAttr(file.type) + '"></audio></div>';
+          this.previewModal.content = '<div class="preview-audio-wrap"><span class="text-6xl mb-4">\uD83C\uDFB5</span><audio controls preload="metadata" class="w-full"><source src="' + previewUrl + '" type="' + this._escAttr(file.type) + '"></audio></div>';
           this.previewModal.loading = false;
         } else if (file.type === 'application/pdf') {
           this.previewModal.content = '<iframe src="' + previewUrl + '" class="preview-iframe"></iframe>';
@@ -696,24 +1232,33 @@ function cloudvault() {
           const text = await res.text();
 
           if (file.name.endsWith('.md')) {
-            this.previewModal.content = '<div class="preview-markdown">' + (typeof marked !== 'undefined' ? marked.parse(text) : '<pre>' + this._escHtml(text) + '</pre>') + '</div>';
+            const markedReady = await this.ensureMarkedReady();
+            this.previewModal.content = '<div class="preview-markdown">' + (markedReady ? window.marked.parse(text) : '<pre>' + this._escHtml(text) + '</pre>') + '</div>';
           } else {
-            const ext = file.name.split('.').pop().toLowerCase();
+            const ext = (file.name.split('.').pop() || '').toLowerCase();
             const langMap = {js:'javascript',ts:'typescript',py:'python',rb:'ruby',rs:'rust',sh:'bash',yml:'yaml',md:'markdown',jsx:'jsx',tsx:'tsx'};
             const lang = langMap[ext] || ext;
-            let highlighted = this._escHtml(text);
-            if (typeof Prism !== 'undefined' && Prism.languages[lang]) {
-              highlighted = Prism.highlight(text, Prism.languages[lang], lang);
+            const prismReady = await this.ensurePrismReady();
+            this.previewModal.content = '<pre class="preview-code"><code class="language-' + this._escAttr(lang || 'plain') + '">' + this._escHtml(text) + '</code></pre>';
+            if (prismReady && typeof this.$nextTick === 'function') {
+              this.$nextTick(() => {
+                try {
+                  if (window.Prism && this.$refs?.previewBody) {
+                    window.Prism.highlightAllUnder(this.$refs.previewBody);
+                  }
+                } catch (error) {
+                  console.error('Failed to highlight preview code:', error);
+                }
+              });
             }
-            this.previewModal.content = '<pre class="preview-code"><code class="language-' + lang + '">' + highlighted + '</code></pre>';
           }
           this.previewModal.loading = false;
         } else {
-          this.previewModal.content = '<div class="preview-unsupported"><span class="text-5xl mb-3">' + this.getFileIcon(file.type, file.name) + '</span><p class="text-sm" style="color:var(--text-secondary)">Preview not available for this file type</p></div>';
+          this.previewModal.content = '<div class="preview-unsupported"><span class="text-5xl mb-3">' + this.getFileIcon(file.type, file.name) + '</span><p class="text-sm" style="color:var(--text-secondary)">该文件类型不支持预览</p></div>';
           this.previewModal.loading = false;
         }
       } catch (e) {
-        this.previewModal.content = '<div class="preview-unsupported"><p class="text-sm" style="color:var(--danger)">Failed to load preview</p></div>';
+        this.previewModal.content = '<div class="preview-unsupported"><p class="text-sm" style="color:var(--danger)">加载预览失败</p></div>';
         this.previewModal.loading = false;
       }
     },
@@ -743,7 +1288,7 @@ function cloudvault() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ids }),
         });
-        if (!res || !res.ok) { this.showToast('Failed to download zip', 'error'); return; }
+        if (!res || !res.ok) { this.showToast('下载压缩包失败', 'error'); return; }
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -753,8 +1298,8 @@ function cloudvault() {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        this.showToast('Zip downloaded', 'success');
-      } catch { this.showToast('Failed to download zip', 'error'); }
+        this.showToast('压缩包下载成功', 'success');
+      } catch { this.showToast('下载压缩包失败', 'error'); }
     },
 
     openContextMenu(event, file) {
@@ -770,9 +1315,6 @@ function cloudvault() {
       const files = event.target.files;
       if (files.length) {
         window.UploadManager.addFiles(files, this.currentFolder);
-        this.uploads = [...window.UploadManager.queue.map(q => ({
-          name: q.file.name, progress: q.progress, status: q.status
-        }))];
       }
       event.target.value = '';
     },
@@ -793,16 +1335,14 @@ function cloudvault() {
       for (const [folder, files] of Object.entries(byFolder)) {
         window.UploadManager.addFiles(files, folder);
       }
-      this.uploads = [...window.UploadManager.queue.map(q => ({
-        name: q.file.name, progress: q.progress, status: q.status
-      }))];
     },
 
     toggleDarkMode() {
       this.darkMode = !this.darkMode;
       document.documentElement.classList.toggle('dark', this.darkMode);
       document.documentElement.classList.toggle('light', !this.darkMode);
-      localStorage.setItem('cv-dark', this.darkMode);
+      localStorage.setItem('cv-dark', this.darkMode ? 'true' : 'false');
+      localStorage.setItem('cloudvault-theme', this.darkMode ? 'dark' : 'light');
     },
 
     async loadSettings() {
@@ -839,9 +1379,9 @@ function cloudvault() {
           if (this._branding.siteIconUrl) { if (!fi) { fi = document.createElement('link'); fi.rel = 'icon'; document.head.appendChild(fi); } fi.href = this._branding.siteIconUrl; }
           else if (fi) { fi.remove(); }
           this.settingsModal.show = false;
-          this.showToast('Settings saved', 'success');
-        } else { this.showToast('Failed to save settings', 'error'); }
-      } catch { this.showToast('Failed to save settings', 'error'); }
+          this.showToast('设置已保存', 'success');
+        } else { this.showToast('保存设置失败', 'error'); }
+      } catch { this.showToast('保存设置失败', 'error'); }
     },
 
     async logout() {
@@ -875,6 +1415,9 @@ function cloudvault() {
         this.renameFolderModal.show = false;
         this.deleteFolderModal.show = false;
         this.folderShareLinkModal.show = false;
+        this.sharesModal.show = false;
+        this.showUploadsModal = false;
+        this.fileInfoModal.show = false;
       }
     },
 
@@ -891,6 +1434,119 @@ function cloudvault() {
       }, 3000);
     },
 
+    // ========== 分享管理相关方法 ==========
+    openSharesModal() {
+      this.sharesModal.show = true;
+      this.sharesModal.tab = 'files';
+      this.loadShares();
+    },
+
+    async loadShares() {
+      this.sharesModal.loading = true;
+      try {
+        const [filesRes, foldersRes] = await Promise.all([
+          this.apiFetch('/api/shares/files'),
+          this.apiFetch('/api/shares/folders')
+        ]);
+        if (filesRes && filesRes.ok) {
+          this.sharesModal.files = await filesRes.json();
+        }
+        if (foldersRes && foldersRes.ok) {
+          this.sharesModal.folders = await foldersRes.json();
+        }
+      } catch (e) {
+        this.showToast('加载分享列表失败', 'error');
+      } finally {
+        this.sharesModal.loading = false;
+      }
+    },
+
+    async revokeFileShare(fileId) {
+      if (!confirm('确定撤销此文件的分享链接？')) return;
+      try {
+        const res = await this.apiFetch('/api/share/' + fileId, { method: 'DELETE' });
+        if (res && res.ok) {
+          this.showToast('分享链接已撤销', 'success');
+          this.sharesModal.files = this.sharesModal.files.filter(f => f.id !== fileId);
+          const file = this.files.find(f => f.id === fileId);
+          if (file) file.shareToken = null;
+        } else {
+          this.showToast('撤销失败', 'error');
+        }
+      } catch {
+        this.showToast('撤销失败', 'error');
+      }
+    },
+
+    async revokeFolderShare(folder) {
+      if (!confirm('确定撤销此文件夹的分享链接？')) return;
+      try {
+        const res = await this.apiFetch('/api/folder-share-link/' + encodeURIComponent(folder), { method: 'DELETE' });
+        if (res && res.ok) {
+          this.showToast('文件夹分享链接已撤销', 'success');
+          this.sharesModal.folders = this.sharesModal.folders.filter(f => f.folder !== folder);
+        } else {
+          this.showToast('撤销失败', 'error');
+        }
+      } catch {
+        this.showToast('撤销失败', 'error');
+      }
+    },
+
+    // ========== 上传控制相关方法 ==========
+    pauseUpload(id) {
+      if (!window.UploadManager) return;
+      window.UploadManager.pauseUpload(id);
+    },
+    resumeUpload(id) {
+      if (!window.UploadManager) return;
+      window.UploadManager.resumeUpload(id);
+    },
+    cancelUpload(id) {
+      if (!window.UploadManager) return;
+      if (confirm('确定取消上传？')) {
+        window.UploadManager.cancelUpload(id);
+      }
+    },
+    retryUpload(id) {
+      if (!window.UploadManager) return;
+      window.UploadManager.retryFailed(id);
+    },
+    clearCompletedUploads() {
+      if (!window.UploadManager) return;
+      window.UploadManager.clearCompleted();
+    },
+    formatTime(seconds) {
+      if (seconds === Infinity || seconds === 0) return '剩余时间未知';
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+      if (h > 0) return `${h}小时${m}分`;
+      if (m > 0) return `${m}分${s}秒`;
+      return `${s}秒`;
+    },
+
+    openUploadsModal() {
+      this.showUploadsModal = true;
+      if (!window.UploadManager || typeof window.UploadManager.getAllItems !== 'function') {
+        this.allUploads = [];
+        return;
+      }
+      this.allUploads = window.UploadManager.getAllItems().map(item => ({
+        id: item.id,
+        name: item.name,
+        size: item.size,
+        progress: item.progress,
+        status: item.status,
+        speed: item.speed,
+        eta: item.eta,
+        retryCount: item.retryCount,
+        createdAt: item.createdAt,
+        folder: item.folder,
+      }));
+    },
+
+    // ========== 格式化方法 ==========
     formatBytes(bytes) {
       if (!bytes || bytes === 0) return '0 B';
       const k = 1024;
@@ -905,13 +1561,13 @@ function cloudvault() {
       const now = new Date();
       const diff = now - date;
       const mins = Math.floor(diff / 60000);
-      if (mins < 1) return 'Just now';
-      if (mins < 60) return mins + 'm ago';
+      if (mins < 1) return '刚刚';
+      if (mins < 60) return mins + ' 分钟前';
       const hours = Math.floor(mins / 60);
-      if (hours < 24) return hours + 'h ago';
+      if (hours < 24) return hours + ' 小时前';
       const days = Math.floor(hours / 24);
-      if (days < 7) return days + 'd ago';
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+      if (days < 7) return days + ' 天前';
+      return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
     },
 
     getFileCategory(type, name) {

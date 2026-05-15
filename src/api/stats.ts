@@ -1,40 +1,34 @@
-import { Env, FileMeta, KV_PREFIX } from '../utils/types';
+import { Env, FileMeta } from '../utils/types';
 import { json } from '../utils/response';
 
 export async function getStats(request: Request, env: Env): Promise<Response> {
-  const files: FileMeta[] = [];
-  let cursor: string | undefined;
+  const agg = await env.DB.prepare(
+    `SELECT COUNT(*) as totalFiles, SUM(size) as totalSize, SUM(downloads) as totalDownloads FROM files`
+  ).first<{ totalFiles: number; totalSize: number; totalDownloads: number }>();
+  const totalFiles = agg?.totalFiles || 0;
+  const totalSize = agg?.totalSize || 0;
+  const totalDownloads = agg?.totalDownloads || 0;
 
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: KV_PREFIX.FILE, limit: 1000, cursor });
-    for (const key of result.keys) {
-      const raw = await env.VAULT_KV.get(key.name);
-      if (raw) {
-        try { files.push(JSON.parse(raw)); } catch { /* skip */ }
-      }
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
+  const recentRows = await env.DB.prepare(
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files ORDER BY uploaded_at DESC LIMIT 5`
+  ).all();
+  const recentUploads = recentRows.results.map(r => ({
+    id: r.id, key: r.key, name: r.name, size: r.size, type: r.type, folder: r.folder,
+    uploadedAt: r.uploadedAt, shareToken: r.shareToken, sharePassword: r.sharePassword,
+    shareExpiresAt: r.shareExpiresAt, downloads: r.downloads,
+  }));
 
-  let totalSize = 0;
-  let totalDownloads = 0;
-  for (const f of files) {
-    totalSize += f.size;
-    totalDownloads += f.downloads;
-  }
-
-  const recentUploads = [...files]
-    .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime())
-    .slice(0, 5);
-
-  const topDownloaded = [...files]
-    .filter(f => f.downloads > 0)
-    .sort((a, b) => b.downloads - a.downloads)
-    .slice(0, 5);
+  const topRows = await env.DB.prepare(
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files WHERE downloads > 0 ORDER BY downloads DESC LIMIT 5`
+  ).all();
+  const topDownloaded = topRows.results.map(r => ({
+    id: r.id, key: r.key, name: r.name, size: r.size, type: r.type, folder: r.folder,
+    uploadedAt: r.uploadedAt, shareToken: r.shareToken, sharePassword: r.sharePassword,
+    shareExpiresAt: r.shareExpiresAt, downloads: r.downloads,
+  }));
 
   return json({
-    totalFiles: files.length,
+    totalFiles,
     totalSize,
     totalDownloads,
     recentUploads,

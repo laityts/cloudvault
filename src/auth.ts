@@ -1,4 +1,4 @@
-import { Env, Session, KV_PREFIX } from './utils/types';
+import { Env, Session } from './utils/types';
 import { json, error, redirect } from './utils/response';
 
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -30,11 +30,9 @@ export async function createSession(env: Env): Promise<{ sessionId: string; cook
     expiresAt: expiresAt.toISOString(),
   };
 
-  await env.VAULT_KV.put(
-    KV_PREFIX.SESSION + sessionId,
-    JSON.stringify(session),
-    { expirationTtl: Math.floor(SESSION_DURATION_MS / 1000) }
-  );
+  await env.DB.prepare(
+    `INSERT INTO sessions (id, created_at, expires_at) VALUES (?, ?, ?)`
+  ).bind(session.id, session.createdAt, session.expiresAt).run();
 
   const cookie = `session=${sessionId}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(SESSION_DURATION_MS / 1000)}`;
   return { sessionId, cookie };
@@ -46,12 +44,13 @@ export async function validateSession(request: Request, env: Env): Promise<boole
   if (!match) return false;
 
   const sessionId = match[1];
-  const raw = await env.VAULT_KV.get(KV_PREFIX.SESSION + sessionId);
-  if (!raw) return false;
+  const session = await env.DB.prepare(
+    `SELECT * FROM sessions WHERE id = ?`
+  ).bind(sessionId).first<Session>();
+  if (!session) return false;
 
-  const session: Session = JSON.parse(raw);
   if (new Date(session.expiresAt) < new Date()) {
-    await env.VAULT_KV.delete(KV_PREFIX.SESSION + sessionId);
+    await env.DB.prepare(`DELETE FROM sessions WHERE id = ?`).bind(sessionId).run();
     return false;
   }
   return true;
@@ -101,7 +100,7 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
 export async function handleLogout(request: Request, env: Env): Promise<Response> {
   const sessionId = getSessionId(request);
   if (sessionId) {
-    await env.VAULT_KV.delete(KV_PREFIX.SESSION + sessionId);
+    await env.DB.prepare(`DELETE FROM sessions WHERE id = ?`).bind(sessionId).run();
   }
   return new Response(null, {
     status: 302,
