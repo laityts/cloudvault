@@ -163,9 +163,10 @@ function cloudvault() {
       if (this.uploadStatusCounts.needs_file > 0) {
         return '检测到 ' + this.uploadStatusCounts.needs_file + ' 个任务缺少本地文件，重新选择原文件后会从已完成分片继续。';
       }
-      if (this.anyPendingOrUploading || this.anyPaused) {
+      if (this.anyPendingOrUploading) {
         return '大文件会自动分片并记住已完成进度，刷新页面后仍可继续。';
       }
+      if (this.anyPaused) return '上传已暂停，继续后会从当前进度恢复。';
       return '支持文件拖拽上传，大文件自动分片，网络中断后可继续。';
     },
 
@@ -1767,6 +1768,16 @@ function cloudvault() {
         return completedChunks > 0
           ? '已保留 ' + completedChunks + '/' + totalChunks + ' 个分片，可直接重试'
           : '本次上传失败，可重试重新建立连接';
+      }
+
+      if (upload.status === 'paused') {
+        return completedChunks > 0
+          ? '已暂停，继续后从 ' + completedChunks + '/' + totalChunks + ' 个分片恢复'
+          : '已暂停，点击继续恢复上传';
+      }
+
+      if (upload.status === 'pending') {
+        return totalChunks > 1 ? '等待上传，开始后会自动分片' : '等待上传';
       }
 
       if (totalChunks > 1) {

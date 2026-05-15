@@ -1028,7 +1028,13 @@ class UploadManager {
     if (!item) return;
 
     if (item.status === 'uploading') {
-      item.controller?.abort();
+      const controller = item.controller;
+      item.status = 'paused';
+      item.speed = 0;
+      item.eta = 0;
+      this.saveToStorage(item);
+      this.dispatch('upload-queue-changed');
+      controller?.abort();
     } else if (item.status === 'pending') {
       item.status = 'paused';
       item.speed = 0;

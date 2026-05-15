@@ -750,18 +750,33 @@
             </div>
             <div class="upload-task-actions">
               <template x-if="upload.status === 'needs_file'">
-                <button @click="relinkUploadFile(upload.id)" class="btn-primary text-xs">补文件</button>
+                <button @click="relinkUploadFile(upload.id)" class="btn-primary upload-action-btn text-xs">
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.5 12.75l6 6 9-13.5"/></svg>
+                  <span>补文件</span>
+                </button>
               </template>
               <template x-if="upload.status === 'pending' || upload.status === 'uploading'">
-                <button @click="pauseUpload(upload.id)" class="btn-secondary text-xs">暂停</button>
+                <button @click="pauseUpload(upload.id)" class="btn-secondary upload-action-btn text-xs">
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                  <span>暂停</span>
+                </button>
               </template>
               <template x-if="upload.status === 'paused'">
-                <button @click="resumeUpload(upload.id)" class="btn-secondary text-xs">继续</button>
+                <button @click="resumeUpload(upload.id)" class="btn-secondary upload-action-btn text-xs">
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                  <span>继续</span>
+                </button>
               </template>
               <template x-if="upload.status === 'error'">
-                <button @click="retryUpload(upload.id)" class="btn-secondary text-xs">重试</button>
+                <button @click="retryUpload(upload.id)" class="btn-secondary upload-action-btn text-xs">
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.023 9.348h4.992V4.356M20.49 9.024A8.25 8.25 0 1 0 21 12"/></svg>
+                  <span>重试</span>
+                </button>
               </template>
-              <button @click="cancelUpload(upload.id)" class="btn-danger text-xs">取消</button>
+              <button @click="cancelUpload(upload.id)" class="btn-danger upload-action-btn text-xs">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 6h12v12H6z"/></svg>
+                <span>取消</span>
+              </button>
             </div>
           </article>
         </template>
@@ -772,7 +787,7 @@
           <span x-text="'共 ' + allUploads.length + ' 项任务'"></span>
           <span x-show="anyNeedsFile" x-text="'待补文件 ' + uploadStatusCounts.needs_file + ' 项'"></span>
         </div>
-        <div class="flex gap-2 flex-wrap">
+        <div class="upload-modal-footer-actions">
           <button @click="anyPendingOrUploading ? pauseAllUploads() : (anyPaused ? resumeAllUploads() : null)" :disabled="!anyPendingOrUploading && !anyPaused" class="btn-secondary text-xs flex items-center gap-1" :class="{'opacity-50 cursor-not-allowed': !anyPendingOrUploading && !anyPaused}">
             <template x-if="anyPendingOrUploading">
               <span class="flex items-center gap-1">
@@ -791,7 +806,10 @@
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 6h12v12H6z"/></svg>
             <span>取消全部</span>
           </button>
-          <button @click="clearCompletedUploads()" class="btn-secondary text-xs">清理完成项</button>
+          <button @click="clearCompletedUploads()" class="btn-secondary text-xs flex items-center gap-1">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.5 6V5.25A2.25 2.25 0 0 0 14.25 3h-4.5A2.25 2.25 0 0 0 7.5 5.25V6m-3 0h15m-1.5 0-.867 12.142A2.25 2.25 0 0 1 15.89 20.25H8.11a2.25 2.25 0 0 1-2.243-2.108L5 6"/></svg>
+            <span>清理完成项</span>
+          </button>
         </div>
       </div>
     </div>
