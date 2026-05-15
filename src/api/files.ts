@@ -13,6 +13,19 @@ type MultipartPart = {
   etag: string;
 };
 
+type HashAlgorithm = 'SHA-1' | 'SHA-256';
+
+type DigestStream = WritableStream<Uint8Array> & {
+  digest: Promise<ArrayBuffer>;
+};
+
+type DigestStreamConstructor = new (algorithm: HashAlgorithm) => DigestStream;
+
+type HashResult = {
+  sha1: string;
+  sha256: string;
+};
+
 type UploadConflictResult = {
   exists: boolean;
   reason?: string;
@@ -187,37 +200,127 @@ function parseByteRange(rangeHeader: string, totalSize: number): ByteRange | 'un
   return { start, end: Math.min(end, totalSize - 1) };
 }
 
-// 计算文件哈希
-async function computeHashes(body: ReadableStream<Uint8Array> | null): Promise<{ sha1: string; sha256: string } | null> {
-  if (!body) return null;
+function getDigestStreamConstructor(): DigestStreamConstructor | null {
+  const runtimeCrypto = crypto as Crypto & { DigestStream?: DigestStreamConstructor };
+  return typeof runtimeCrypto.DigestStream === 'function' ? runtimeCrypto.DigestStream : null;
+}
+
+function arrayBufferToHex(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function computeHashesWithDigestStream(
+  body: ReadableStream<Uint8Array>,
+  DigestStream: DigestStreamConstructor
+): Promise<HashResult | null> {
+  // 使用 Workers DigestStream 流式计算哈希，避免一次性读完整文件进内存。
+  const sha1Stream = new DigestStream('SHA-1');
+  const sha256Stream = new DigestStream('SHA-256');
+  const sha1Writer = sha1Stream.getWriter();
+  const sha256Writer = sha256Stream.getWriter();
+  const sha1Digest = sha1Stream.digest;
+  const sha256Digest = sha256Stream.digest;
+  const reader = body.getReader();
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await Promise.all([
+        sha1Writer.write(value),
+        sha256Writer.write(value),
+      ]);
+    }
+
+    await Promise.all([
+      sha1Writer.close(),
+      sha256Writer.close(),
+    ]);
+
+    const [sha1Buffer, sha256Buffer] = await Promise.all([sha1Digest, sha256Digest]);
+    return {
+      sha1: arrayBufferToHex(sha1Buffer),
+      sha256: arrayBufferToHex(sha256Buffer),
+    };
+  } catch (err) {
+    await Promise.allSettled([
+      reader.cancel(err),
+      sha1Writer.abort(err),
+      sha256Writer.abort(err),
+      sha1Digest,
+      sha256Digest,
+    ]);
+    return null;
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
+    try {
+      sha1Writer.releaseLock();
+    } catch {}
+    try {
+      sha256Writer.releaseLock();
+    } catch {}
+  }
+}
+
+async function computeHashesInMemory(body: ReadableStream<Uint8Array>, size: number): Promise<HashResult | null> {
+  if (!Number.isFinite(size) || size < 0 || size > MAX_SYNC_HASH_SIZE) return null;
+
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let totalLength = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    totalLength += value.length;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalLength += value.length;
+      if (totalLength > MAX_SYNC_HASH_SIZE) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
   }
+
   const fullBuffer = new Uint8Array(totalLength);
   let offset = 0;
   for (const chunk of chunks) {
     fullBuffer.set(chunk, offset);
     offset += chunk.length;
   }
-  const sha1Buffer = await crypto.subtle.digest('SHA-1', fullBuffer);
-  const sha256Buffer = await crypto.subtle.digest('SHA-256', fullBuffer);
-  const sha1 = Array.from(new Uint8Array(sha1Buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-  const sha256 = Array.from(new Uint8Array(sha256Buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-  return { sha1, sha256 };
+
+  try {
+    const [sha1Buffer, sha256Buffer] = await Promise.all([
+      crypto.subtle.digest('SHA-1', fullBuffer),
+      crypto.subtle.digest('SHA-256', fullBuffer),
+    ]);
+    return {
+      sha1: arrayBufferToHex(sha1Buffer),
+      sha256: arrayBufferToHex(sha256Buffer),
+    };
+  } catch {
+    return null;
+  }
 }
 
-async function computeObjectHashes(env: Env, key: string, size: number): Promise<{ sha1: string; sha256: string } | null> {
-  // Workers 的 Web Crypto 只能一次性 digest 全量 Buffer，大文件同步哈希容易耗尽内存。
-  if (!Number.isFinite(size) || size < 0 || size > MAX_SYNC_HASH_SIZE) return null;
+async function computeHashes(body: ReadableStream<Uint8Array> | null, size: number): Promise<HashResult | null> {
+  if (!body) return null;
+  const DigestStream = getDigestStreamConstructor();
+  return DigestStream
+    ? computeHashesWithDigestStream(body, DigestStream)
+    : computeHashesInMemory(body, size);
+}
+
+async function computeObjectHashes(env: Env, key: string): Promise<HashResult | null> {
   try {
     const objectForHash = await env.VAULT_BUCKET.get(key);
-    return objectForHash ? await computeHashes(objectForHash.body) : null;
+    return objectForHash ? await computeHashes(objectForHash.body, objectForHash.size) : null;
   } catch {
     return null;
   }
@@ -483,7 +586,7 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
   }
 
   // 计算哈希
-  const hashes = await computeObjectHashes(env, key, r2Object.size);
+  const hashes = await computeObjectHashes(env, key);
 
   const meta: FileMeta = {
     id,
@@ -727,7 +830,7 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
     return error('Upload session mismatch', 409);
   }
 
-  const hashes = await computeObjectHashes(env, body.key, r2Object.size);
+  const hashes = await computeObjectHashes(env, body.key);
   if (hashes) {
     await env.DB.prepare(
       `UPDATE files SET sha1 = ?, sha256 = ? WHERE id = ?`
