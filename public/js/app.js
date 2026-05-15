@@ -76,6 +76,10 @@ function cloudvault() {
     get anyPendingOrUploading() {
       return this.allUploads.some(u => u.status === 'pending' || u.status === 'uploading');
     },
+
+    get anyPausing() {
+      return this.allUploads.some(u => u.status === 'pausing');
+    },
     // 是否存在暂停的任务
     get anyPaused() {
       return this.allUploads.some(u => u.status === 'paused');
@@ -99,7 +103,7 @@ function cloudvault() {
     },
 
     get currentFolderLabel() {
-      return this.currentFolder === 'root' ? '首页 /' : '/' + this.currentFolder;
+      return this.currentFolder === 'root' ? '主页 /' : '/' + this.currentFolder;
     },
 
     get uploadStatusCounts() {
@@ -107,6 +111,7 @@ function cloudvault() {
         pending: 0,
         uploading: 0,
         paused: 0,
+        pausing: 0,
         done: 0,
         error: 0,
         needs_file: 0,
@@ -131,9 +136,9 @@ function cloudvault() {
         {
           key: 'uploading',
           label: '进行中',
-          value: this.uploadStatusCounts.uploading + this.uploadStatusCounts.pending,
+          value: this.uploadStatusCounts.uploading + this.uploadStatusCounts.pending + this.uploadStatusCounts.pausing,
           tone: 'accent',
-          helper: this.anyPendingOrUploading ? '等待与上传任务都在这里' : '暂无活动任务',
+          helper: this.anyPendingOrUploading || this.anyPausing ? '等待与上传任务都在这里' : '暂无活动任务',
         },
         {
           key: 'paused',
@@ -163,6 +168,7 @@ function cloudvault() {
       if (this.uploadStatusCounts.needs_file > 0) {
         return '检测到 ' + this.uploadStatusCounts.needs_file + ' 个任务缺少本地文件，重新选择原文件后会从已完成分片继续。';
       }
+      if (this.anyPausing) return '正在暂停上传，完成中断后会进入可恢复状态。';
       if (this.anyPendingOrUploading) {
         return '大文件会自动分片并记住已完成进度，刷新页面后仍可继续。';
       }
@@ -357,6 +363,7 @@ function cloudvault() {
     getUploadSortWeight(status) {
       const weights = {
         uploading: 0,
+        pausing: 1,
         pending: 1,
         needs_file: 2,
         paused: 3,
@@ -382,7 +389,7 @@ function cloudvault() {
           return (b.createdAt || 0) - (a.createdAt || 0);
         });
       this.allUploads = items;
-      this.uploads = items.filter(item => item.status === 'pending' || item.status === 'uploading' || item.status === 'paused' || item.status === 'needs_file');
+      this.uploads = items.filter(item => item.status === 'pending' || item.status === 'uploading' || item.status === 'pausing' || item.status === 'paused' || item.status === 'needs_file');
     },
 
     setupDragDrop() {
@@ -1722,6 +1729,7 @@ function cloudvault() {
       const labels = {
         pending: '等待中',
         uploading: '上传中',
+        pausing: '暂停中',
         paused: '已暂停',
         done: '已完成',
         error: '失败',
@@ -1735,6 +1743,7 @@ function cloudvault() {
       const tones = {
         pending: 'tone-pending',
         uploading: 'tone-uploading',
+        pausing: 'tone-pausing',
         paused: 'tone-paused',
         done: 'tone-done',
         error: 'tone-error',
@@ -1774,6 +1783,10 @@ function cloudvault() {
         return completedChunks > 0
           ? '已暂停，继续后从 ' + completedChunks + '/' + totalChunks + ' 个分片恢复'
           : '已暂停，点击继续恢复上传';
+      }
+
+      if (upload.status === 'pausing') {
+        return '正在停止当前上传请求，请稍候';
       }
 
       if (upload.status === 'pending') {

@@ -21,7 +21,7 @@ class UploadManager {
   }
 
   normalizeStatus(status) {
-    const allowed = new Set(['pending', 'uploading', 'paused', 'done', 'error', 'cancelled', 'needs_file']);
+    const allowed = new Set(['pending', 'uploading', 'pausing', 'paused', 'done', 'error', 'cancelled', 'needs_file']);
     return allowed.has(status) ? status : 'pending';
   }
 
@@ -134,6 +134,10 @@ class UploadManager {
     };
 
     if (normalized.status === 'uploading') {
+      normalized.status = normalized.file ? 'paused' : 'needs_file';
+    }
+
+    if (normalized.status === 'pausing') {
       normalized.status = normalized.file ? 'paused' : 'needs_file';
     }
 
@@ -656,6 +660,7 @@ class UploadManager {
 
     const controller = new AbortController();
     item.controller = controller;
+    item.status = 'uploading';
     item.speed = 0;
     item.eta = 0;
     item.speedSamples = [];
@@ -676,6 +681,14 @@ class UploadManager {
         await this.multipartUpload(item);
       }
 
+      if (!this.queue.some(entry => entry.id === item.id)) {
+        return;
+      }
+
+      if (item.status === 'pausing') {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+
       item.status = 'done';
       item.progress = 100;
       item.uploadedBytes = item.size;
@@ -693,6 +706,10 @@ class UploadManager {
       this.dispatch('upload-complete', { name: item.name });
       this.dispatch('upload-queue-changed');
     } catch (error) {
+      if (!this.queue.some(entry => entry.id === item.id)) {
+        return;
+      }
+
       if (error?.name === 'AbortError') {
         item.status = 'paused';
         item.controller = null;
@@ -1029,7 +1046,7 @@ class UploadManager {
 
     if (item.status === 'uploading') {
       const controller = item.controller;
-      item.status = 'paused';
+      item.status = 'pausing';
       item.speed = 0;
       item.eta = 0;
       this.saveToStorage(item);
@@ -1134,7 +1151,7 @@ class UploadManager {
     const item = this.queue.find(entry => entry.id === id);
     if (!item) return;
 
-    if (item.status === 'uploading') {
+    if (item.status === 'uploading' || item.status === 'pausing') {
       item.controller?.abort();
     }
 
@@ -1164,6 +1181,7 @@ class UploadManager {
     this.queue = this.queue.filter(item =>
       item.status === 'pending' ||
       item.status === 'uploading' ||
+      item.status === 'pausing' ||
       item.status === 'paused' ||
       item.status === 'needs_file'
     );

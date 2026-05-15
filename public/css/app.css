@@ -2839,10 +2839,15 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
   gap: 0.7rem;
 }
 
+.workspace-breadcrumbline,
 .workspace-home-line,
 .workspace-pathline {
   width: 100%;
   min-width: 0;
+}
+
+.workspace-breadcrumbline {
+  flex-wrap: wrap;
 }
 
 .workspace-pathline {
@@ -3138,7 +3143,13 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
 
 .upload-summary-chip.tone-accent,
 .upload-status-pill.tone-uploading,
+.upload-status-pill.tone-pausing,
 .upload-task-card.tone-uploading {
+  border-color: rgba(79, 180, 255, 0.22);
+  background: rgba(79, 180, 255, 0.08);
+}
+
+.upload-task-card.tone-pausing {
   border-color: rgba(79, 180, 255, 0.22);
   background: rgba(79, 180, 255, 0.08);
 }
@@ -3645,9 +3656,22 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
     grid-template-columns: 1fr;
   }
 
-  .upload-hero-stats,
-  .upload-modal-summary {
+  .upload-hero-stats {
     grid-template-columns: 1fr;
+  }
+
+  .upload-modal-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .upload-summary-chip {
+    min-height: 82px;
+    padding: 0.7rem;
+  }
+
+  .upload-summary-chip small {
+    font-size: 0.68rem;
   }
 
   .upload-modal-panel {

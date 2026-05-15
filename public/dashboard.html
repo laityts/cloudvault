@@ -88,17 +88,14 @@
       <!-- 操作栏 -->
       <div class="toolbar workspace-toolbar border-b" :class="{'toolbar-collapsed': toolbarCollapsed}" style="border-color:var(--border)">
         <div class="workspace-topline">
-          <div class="workspace-home-line breadcrumb flex items-center gap-1 text-sm">
+          <div class="workspace-breadcrumbline breadcrumb flex items-center gap-1 text-sm">
             <a href="#" @click.prevent="navigateFolder('root')" class="flex items-center gap-1">
               <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.25 12l8.954-8.955a1.126 1.126 0 011.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"/></svg>
-              首页
+              主页
             </a>
-          </div>
-
-          <div class="workspace-pathline breadcrumb flex items-center gap-1 text-sm" x-show="currentFolder !== 'root'">
             <template x-for="(part, i) in currentFolder === 'root' ? [] : currentFolder.split('/')" :key="i">
               <span class="flex items-center gap-1">
-                <svg x-show="i > 0" class="w-3 h-3" style="color:var(--text-muted)" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
+                <svg class="w-3 h-3" style="color:var(--text-muted)" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
                 <a href="#" @click.prevent="navigateFolder(currentFolder.split('/').slice(0, i + 1).join('/'))" x-text="part"></a>
               </span>
             </template>
@@ -344,7 +341,7 @@
     <div class="text-center">
       <svg class="w-16 h-16 mx-auto mb-4 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
       <p class="text-xl font-semibold text-accent-400">拖放文件以上传</p>
-      <p class="text-sm mt-1" style="color:var(--text-muted)" x-text="'到 ' + (currentFolder === 'root' ? '首页' : currentFolder)"></p>
+      <p class="text-sm mt-1" style="color:var(--text-muted)" x-text="'到 ' + (currentFolder === 'root' ? '主页' : currentFolder)"></p>
     </div>
   </div>
 
@@ -465,7 +462,7 @@
           <label class="flex items-center justify-between cursor-pointer">
             <div>
               <span class="text-sm font-medium">启用访客页面</span>
-              <p class="text-xs mt-0.5" style="color:var(--text-muted)">在首页显示公开分享的文件</p>
+              <p class="text-xs mt-0.5" style="color:var(--text-muted)">在主页显示公开分享的文件</p>
             </div>
             <div class="relative">
               <input type="checkbox" x-model="settingsModal.guestPageEnabled" class="sr-only peer">
