@@ -4,6 +4,7 @@ import { getSharedFolders, getExcludedFolders, isFolderShared } from './share';
 import { getAllowedUploadExtensionList, getSettings } from './settings';
 
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
+const MOVE_CONCURRENCY = 4;
 
 type MultipartPart = {
   partNumber: number;
@@ -64,12 +65,40 @@ function remapFolderPath(path: string, oldPath: string, newPath: string): string
   return path === oldPath ? newPath : newPath + path.slice(oldPath.length);
 }
 
+type StoredFileRow = {
+  id: string;
+  key: string;
+  name: string;
+  folder: string;
+  uploadStatus?: string | null;
+};
+
 async function readJsonBody<T>(request: Request): Promise<T | null> {
   try {
     return await request.json<T>();
   } catch {
     return null;
   }
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>
+): Promise<void> {
+  if (!Array.isArray(items) || items.length === 0) return;
+  const concurrency = Math.max(1, Math.min(limit, items.length));
+  let cursor = 0;
+
+  const runners = Array.from({ length: concurrency }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      await worker(items[index], index);
+    }
+  });
+
+  await Promise.all(runners);
 }
 
 function parseUploadRequestMeta(request: Request): { fileName: string; folder: string; contentType: string; key: string } | null {
@@ -858,98 +887,129 @@ async function hasIncompleteUploadsInFolderTree(env: Env, folder: string): Promi
   return !!row;
 }
 
+async function listStoredFilesByIds(env: Env, ids: string[]): Promise<StoredFileRow[]> {
+  const uniqueIds = Array.from(new Set(
+    (Array.isArray(ids) ? ids : [])
+      .filter((id): id is string => typeof id === 'string')
+      .map(id => id.trim())
+      .filter(Boolean)
+  ));
+  if (uniqueIds.length === 0) return [];
+
+  const placeholders = uniqueIds.map(() => '?').join(', ');
+  const rows = await env.DB.prepare(
+    `SELECT id, key, name, folder, upload_status as uploadStatus
+     FROM files
+     WHERE id IN (${placeholders})`
+  ).bind(...uniqueIds).all<StoredFileRow>();
+
+  return Array.isArray(rows.results)
+    ? rows.results.map(row => ({
+        id: row.id as string,
+        key: row.key as string,
+        name: row.name as string,
+        folder: row.folder as string,
+        uploadStatus: (row as { uploadStatus?: string | null }).uploadStatus ?? null,
+      }))
+    : [];
+}
+
+async function relocateStoredFile(
+  env: Env,
+  file: StoredFileRow,
+  nextFolder: string
+): Promise<boolean> {
+  const nextKey = buildFileKey(nextFolder, file.name);
+  if (!file.key || file.key === nextKey) {
+    await env.DB.prepare(`UPDATE files SET folder = ?, key = ? WHERE id = ?`).bind(nextFolder, nextKey, file.id).run();
+    return true;
+  }
+
+  const object = await env.VAULT_BUCKET.get(file.key);
+  if (!object) return false;
+
+  await env.VAULT_BUCKET.put(nextKey, object.body, {
+    httpMetadata: object.httpMetadata,
+    customMetadata: object.customMetadata,
+  });
+  await env.VAULT_BUCKET.delete(file.key);
+  await env.DB.prepare(`UPDATE files SET folder = ?, key = ? WHERE id = ?`).bind(nextFolder, nextKey, file.id).run();
+  return true;
+}
+
+async function rewriteFolderMetadata(env: Env, oldPath: string, newPath: string): Promise<void> {
+  const prefixPattern = oldPath + '/%';
+  const suffixStart = oldPath.length + 1;
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE folders
+       SET path = CASE
+         WHEN path = ? THEN ?
+         ELSE ? || substr(path, ?)
+       END
+       WHERE path = ? OR path LIKE ?`
+    ).bind(oldPath, newPath, newPath, suffixStart, oldPath, prefixPattern),
+    env.DB.prepare(
+      `UPDATE folder_shares
+       SET folder = CASE
+         WHEN folder = ? THEN ?
+         ELSE ? || substr(folder, ?)
+       END
+       WHERE folder = ? OR folder LIKE ?`
+    ).bind(oldPath, newPath, newPath, suffixStart, oldPath, prefixPattern),
+    env.DB.prepare(
+      `UPDATE folder_excludes
+       SET folder = CASE
+         WHEN folder = ? THEN ?
+         ELSE ? || substr(folder, ?)
+       END
+       WHERE folder = ? OR folder LIKE ?`
+    ).bind(oldPath, newPath, newPath, suffixStart, oldPath, prefixPattern),
+    env.DB.prepare(
+      `UPDATE folder_share_meta
+       SET folder = CASE
+         WHEN folder = ? THEN ?
+         ELSE ? || substr(folder, ?)
+       END
+       WHERE folder = ? OR folder LIKE ?`
+    ).bind(oldPath, newPath, newPath, suffixStart, oldPath, prefixPattern),
+    env.DB.prepare(
+      `UPDATE folder_share_links
+       SET folder = CASE
+         WHEN folder = ? THEN ?
+         ELSE ? || substr(folder, ?)
+       END
+       WHERE folder = ? OR folder LIKE ?`
+    ).bind(oldPath, newPath, newPath, suffixStart, oldPath, prefixPattern),
+  ]);
+}
+
 async function rewriteFolderTree(env: Env, oldPath: string, newPath: string): Promise<void> {
-  const folderRows = await env.DB.prepare(
-    `SELECT path
-     FROM folders
-     WHERE path = ? OR path LIKE ?
-     ORDER BY LENGTH(path) ASC`
-  ).bind(oldPath, oldPath + '/%').all<{ path: string }>();
-
-  for (const row of folderRows.results) {
-    const currentPath = row.path as string;
-    const nextPath = remapFolderPath(currentPath, oldPath, newPath);
-    if (currentPath === nextPath) continue;
-    await env.DB.prepare(`UPDATE folders SET path = ? WHERE path = ?`).bind(nextPath, currentPath).run();
-  }
-
-  const shareRows = await env.DB.prepare(
-    `SELECT folder
-     FROM folder_shares
-     WHERE folder = ? OR folder LIKE ?
-     ORDER BY LENGTH(folder) ASC`
-  ).bind(oldPath, oldPath + '/%').all<{ folder: string }>();
-
-  for (const row of shareRows.results) {
-    const currentPath = row.folder as string;
-    const nextPath = remapFolderPath(currentPath, oldPath, newPath);
-    if (currentPath === nextPath) continue;
-    await env.DB.prepare(`UPDATE folder_shares SET folder = ? WHERE folder = ?`).bind(nextPath, currentPath).run();
-  }
-
-  const excludeRows = await env.DB.prepare(
-    `SELECT folder
-     FROM folder_excludes
-     WHERE folder = ? OR folder LIKE ?
-     ORDER BY LENGTH(folder) ASC`
-  ).bind(oldPath, oldPath + '/%').all<{ folder: string }>();
-
-  for (const row of excludeRows.results) {
-    const currentPath = row.folder as string;
-    const nextPath = remapFolderPath(currentPath, oldPath, newPath);
-    if (currentPath === nextPath) continue;
-    await env.DB.prepare(`UPDATE folder_excludes SET folder = ? WHERE folder = ?`).bind(nextPath, currentPath).run();
-  }
-
-  const linkMetaRows = await env.DB.prepare(
-    `SELECT folder
-     FROM folder_share_meta
-     WHERE folder = ? OR folder LIKE ?
-     ORDER BY LENGTH(folder) ASC`
-  ).bind(oldPath, oldPath + '/%').all<{ folder: string }>();
-
-  for (const row of linkMetaRows.results) {
-    const currentPath = row.folder as string;
-    const nextPath = remapFolderPath(currentPath, oldPath, newPath);
-    if (currentPath === nextPath) continue;
-    await env.DB.prepare(`UPDATE folder_share_meta SET folder = ? WHERE folder = ?`).bind(nextPath, currentPath).run();
-  }
-
-  const linkRows = await env.DB.prepare(
-    `SELECT token, folder
-     FROM folder_share_links
-     WHERE folder = ? OR folder LIKE ?
-     ORDER BY LENGTH(folder) ASC`
-  ).bind(oldPath, oldPath + '/%').all<{ token: string; folder: string }>();
-
-  for (const row of linkRows.results) {
-    const currentPath = row.folder as string;
-    const nextPath = remapFolderPath(currentPath, oldPath, newPath);
-    if (currentPath === nextPath) continue;
-    await env.DB.prepare(`UPDATE folder_share_links SET folder = ? WHERE token = ?`).bind(nextPath, row.token).run();
-  }
-
   const files = await env.DB.prepare(
     `SELECT id, key, folder, name
      FROM files
      WHERE (folder = ? OR folder LIKE ?)
        AND (upload_status = 'done' OR upload_status IS NULL)`
-  ).bind(oldPath, oldPath + '/%').all<{ id: string; key: string; folder: string; name: string }>();
+  ).bind(oldPath, oldPath + '/%').all<StoredFileRow>();
 
-  for (const row of files.results) {
-    const currentFolder = row.folder as string;
-    const nextFolder = remapFolderPath(currentFolder, oldPath, newPath);
-    const nextKey = buildFileKey(nextFolder, row.name as string);
-    const object = await env.VAULT_BUCKET.get(row.key as string);
-    if (object) {
-      await env.VAULT_BUCKET.put(nextKey, object.body, {
-        httpMetadata: object.httpMetadata,
-        customMetadata: object.customMetadata,
-      });
-      await env.VAULT_BUCKET.delete(row.key as string);
-    }
-    await env.DB.prepare(`UPDATE files SET folder = ?, key = ? WHERE id = ?`).bind(nextFolder, nextKey, row.id).run();
-  }
+  const fileRows = Array.isArray(files.results)
+    ? files.results.map(row => ({
+        id: row.id as string,
+        key: row.key as string,
+        name: row.name as string,
+        folder: row.folder as string,
+        uploadStatus: (row as { uploadStatus?: string | null }).uploadStatus ?? null,
+      }))
+    : [];
+
+  // R2 没有原子重命名，这里用受控并发减少大目录移动时的串行等待。
+  await runWithConcurrency(fileRows, MOVE_CONCURRENCY, async row => {
+    const nextFolder = remapFolderPath(row.folder, oldPath, newPath);
+    await relocateStoredFile(env, row, nextFolder);
+  });
+
+  // 目录与分享元数据不依赖逐条搬运结果，合并成批量更新减少 D1 往返。
+  await rewriteFolderMetadata(env, oldPath, newPath);
 }
 
 export async function createFolder(request: Request, env: Env): Promise<Response> {
@@ -1119,19 +1179,19 @@ export async function moveFiles(request: Request, env: Env): Promise<Response> {
   if (targetFolder !== 'root' && !(await folderTreeExists(env, targetFolder))) {
     return error('Target folder not found', 404);
   }
+
+  const files = await listStoredFilesByIds(env, body.ids);
+  const movableFiles = files.filter(file =>
+    file.folder !== targetFolder &&
+    (!file.uploadStatus || file.uploadStatus === 'done')
+  );
+
   let moved = 0;
-  for (const id of body.ids) {
-    const meta = await getFileById(env, id);
-    if (!meta || meta.folder === targetFolder) continue;
-    if (meta.uploadStatus && meta.uploadStatus !== 'done') continue;
-    const newKey = buildFileKey(targetFolder, meta.name);
-    const oldObject = await env.VAULT_BUCKET.get(meta.key);
-    if (!oldObject) continue;
-    await env.VAULT_BUCKET.put(newKey, oldObject.body, { httpMetadata: oldObject.httpMetadata, customMetadata: oldObject.customMetadata });
-    await env.VAULT_BUCKET.delete(meta.key);
-    await env.DB.prepare(`UPDATE files SET folder = ?, key = ? WHERE id = ?`).bind(targetFolder, newKey, id).run();
-    moved++;
-  }
+  await runWithConcurrency(movableFiles, MOVE_CONCURRENCY, async file => {
+    const success = await relocateStoredFile(env, file, targetFolder);
+    if (success) moved += 1;
+  });
+
   return json<MoveFilesResponse>({ moved });
 }
 
