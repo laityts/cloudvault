@@ -100,6 +100,7 @@ export interface SiteSettings {
   showLoginButton: boolean;
   siteName: string;
   siteIconUrl: string;        // URL to custom logo/icon image (empty = default cloud icon)
+  allowedUploadExtensions: string; // Comma separated extensions, empty = allow all
 }
 
 export const DEFAULT_SETTINGS: SiteSettings = {
@@ -107,4 +108,5 @@ export const DEFAULT_SETTINGS: SiteSettings = {
   showLoginButton: true,
   siteName: 'CloudVault',
   siteIconUrl: '',
+  allowedUploadExtensions: '',
 };

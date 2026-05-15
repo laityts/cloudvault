@@ -28,7 +28,7 @@ function cloudvault() {
     deleteModal: { show: false, ids: [] },
     moveModal: { show: false, files: [], targetFolder: 'root' },
     _branding: JSON.parse(document.getElementById('branding-data')?.textContent || '{"siteName":"CloudVault","siteIconUrl":""}'),
-    settingsModal: { show: false, guestPageEnabled: false, showLoginButton: true, siteName: 'CloudVault', siteIconUrl: '', _iconError: false },
+    settingsModal: { show: false, guestPageEnabled: false, showLoginButton: true, siteName: 'CloudVault', siteIconUrl: '', allowedUploadExtensions: '', _iconError: false },
     renameFolderModal: { show: false, oldName: '', newName: '' },
     deleteFolderModal: { show: false, folder: '' },
     typeFilter: 'all',
@@ -70,6 +70,7 @@ function cloudvault() {
     _remoteAssetPromises: {},
     _filesAbortController: null,
     _lastToolbarScrollTop: 0,
+    _lightboxPreloadImages: [],
     toolbarCollapsed: false,
 
     // 新增计算属性：是否存在等待或上传中的任务
@@ -841,6 +842,25 @@ function cloudvault() {
     },
 
     async fetchFiles(append = false) {
+      const targetPage = append ? this.page : 1;
+      const cacheKey = `files_${this.currentFolder}_${this.searchQuery}_page${targetPage}`;
+      const cached = this.cache[cacheKey];
+      const now = Date.now();
+
+      if (!append && cached && now - cached.timestamp < this.cacheTTL) {
+        if (this._filesAbortController) {
+          this._filesAbortController.abort();
+          this._filesAbortController = null;
+        }
+        this.page = 2;
+        this.files = cached.data.files;
+        this.hasMore = cached.data.hasMore;
+        this.loading = false;
+        this.loadingMore = false;
+        this.queueViewportFillCheck();
+        return;
+      }
+
       if (!append) {
         this.page = 1;
         this.hasMore = true;
@@ -857,9 +877,6 @@ function cloudvault() {
       this.loadingMore = append;
       const requestSignal = append ? null : this._filesAbortController?.signal;
       try {
-        const cacheKey = `files_${this.currentFolder}_${this.searchQuery}_page${this.page}`;
-        const cached = this.cache[cacheKey];
-        const now = Date.now();
         if (cached && now - cached.timestamp < this.cacheTTL) {
           if (append) {
             this.files = [...this.files, ...cached.data.files];
@@ -1363,45 +1380,129 @@ function cloudvault() {
       }
     },
 
+    getFilePreviewMode(file) {
+      const type = (file?.type || '').toLowerCase();
+      const name = (file?.name || '').toLowerCase();
+      if (type.startsWith('image/') || name.match(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/)) return 'image';
+      if (type.startsWith('video/') || name.match(/\.(mp4|webm|ogv|mov|m4v|mkv|avi|mpeg|mpg|3gp)$/)) return 'video';
+      if (type.startsWith('audio/') || name.match(/\.(mp3|wav|ogg|oga|m4a|aac|flac|opus)$/)) return 'audio';
+      if (type === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
+      if (this.isTextPreviewable(file)) return name.match(/\.(md|markdown)$/) ? 'markdown' : 'text';
+      return 'none';
+    },
+
+    getPreviewMimeType(file, mode) {
+      const type = (file?.type || '').toLowerCase();
+      if (type && type !== 'application/octet-stream') return type;
+      const name = (file?.name || '').toLowerCase();
+      const map = {
+        mp4: 'video/mp4',
+        m4v: 'video/mp4',
+        mov: 'video/quicktime',
+        webm: 'video/webm',
+        ogv: 'video/ogg',
+        mkv: 'video/x-matroska',
+        avi: 'video/x-msvideo',
+        mpeg: 'video/mpeg',
+        mpg: 'video/mpeg',
+        '3gp': 'video/3gpp',
+        mp3: 'audio/mpeg',
+        m4a: 'audio/mp4',
+        aac: 'audio/aac',
+        flac: 'audio/flac',
+        wav: 'audio/wav',
+        ogg: mode === 'audio' ? 'audio/ogg' : 'video/ogg',
+        oga: 'audio/ogg',
+        opus: 'audio/ogg',
+      };
+      const ext = (name.split('.').pop() || '').toLowerCase();
+      return map[ext] || type || 'application/octet-stream';
+    },
+
+    isTextPreviewable(file) {
+      const type = (file?.type || '').toLowerCase();
+      const name = (file?.name || '').toLowerCase();
+      return type.startsWith('text/') || type.includes('javascript') || type.includes('json') || type.includes('xml') ||
+        type.includes('yaml') || name.match(/\.(txt|log|md|markdown|csv|tsv|json|jsonc|xml|html|htm|css|js|mjs|ts|tsx|jsx|py|rb|go|rs|java|c|cpp|h|hpp|cs|sh|bash|zsh|fish|yaml|yml|toml|ini|cfg|conf|sql|swift|kt|php|lua|vue|svelte|zig|nim|dart|r|scala|clj|ex|exs|hs|erl|ps1|bat|cmd|diff|patch|env)$/) ||
+        ['dockerfile', 'makefile', 'license', 'readme', '.env', '.gitignore', '.dockerignore'].includes(name);
+    },
+
+    getPreviewLanguage(name) {
+      const ext = ((name || '').split('.').pop() || '').toLowerCase();
+      const langMap = {
+        js: 'javascript',
+        mjs: 'javascript',
+        ts: 'typescript',
+        py: 'python',
+        rb: 'ruby',
+        rs: 'rust',
+        sh: 'bash',
+        bash: 'bash',
+        zsh: 'bash',
+        yml: 'yaml',
+        md: 'markdown',
+        markdown: 'markdown',
+        jsx: 'jsx',
+        tsx: 'tsx',
+        h: 'c',
+        hpp: 'cpp',
+        env: 'ini',
+        conf: 'ini',
+        cfg: 'ini',
+      };
+      return langMap[ext] || ext || 'plain';
+    },
+
     async previewFile(file) {
-      if (!file || typeof file.id !== 'string' || typeof file.name !== 'string' || typeof file.type !== 'string') {
+      if (!file || typeof file.id !== 'string' || !file.id || typeof file.name !== 'string' || !file.name) {
         this.showToast('文件数据异常，无法预览', 'error');
         return;
       }
 
-      if (file.type.startsWith('image/')) {
+      const mode = this.getFilePreviewMode(file);
+      if (mode === 'image') {
         this.openLightbox(file);
         return;
       }
 
       this.previewModal = { show: true, file, content: '', loading: true };
-      const previewUrl = '/api/files/' + file.id + '/preview';
+      const previewUrl = '/api/files/' + encodeURIComponent(file.id) + '/preview';
 
       try {
-        if (file.type.startsWith('video/')) {
-          this.previewModal.content = '<video controls playsinline preload="metadata" class="preview-media"><source src="' + previewUrl + '" type="' + this._escAttr(file.type) + '">您的浏览器不支持视频播放。</video>';
+        if (mode === 'video') {
+          const mimeType = this.getPreviewMimeType(file, mode);
+          this.previewModal.content = '<div class="preview-media-shell"><video controls playsinline preload="metadata" class="preview-media"><source src="' + this._escAttr(previewUrl) + '" type="' + this._escAttr(mimeType) + '">您的浏览器不支持视频播放。</video></div>';
           this.previewModal.loading = false;
-        } else if (file.type.startsWith('audio/')) {
-          this.previewModal.content = '<div class="preview-audio-wrap"><span class="text-6xl mb-4">\uD83C\uDFB5</span><audio controls preload="metadata" class="w-full"><source src="' + previewUrl + '" type="' + this._escAttr(file.type) + '"></audio></div>';
+        } else if (mode === 'audio') {
+          const mimeType = this.getPreviewMimeType(file, mode);
+          this.previewModal.content = '<div class="preview-audio-wrap"><span class="preview-audio-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 18V6l9-2.25v12"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M18 15a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg></span><audio controls preload="metadata" class="preview-audio"><source src="' + this._escAttr(previewUrl) + '" type="' + this._escAttr(mimeType) + '"></audio></div>';
           this.previewModal.loading = false;
-        } else if (file.type === 'application/pdf') {
-          this.previewModal.content = '<iframe src="' + previewUrl + '" class="preview-iframe"></iframe>';
+        } else if (mode === 'pdf') {
+          this.previewModal.content = '<iframe src="' + this._escAttr(previewUrl) + '" class="preview-iframe"></iframe>';
           this.previewModal.loading = false;
-        } else if (file.type.startsWith('text/') || file.type.includes('javascript') || file.type.includes('json') || file.type.includes('xml') ||
-                   file.name.match(/\.(js|ts|py|rb|go|rs|java|c|cpp|h|sh|yaml|yml|json|toml|md|html|css|sql|swift|kt|php|lua|tsx|jsx)$/i)) {
-          const res = await this.apiFetch(previewUrl);
-          if (!res) return;
+        } else if (mode === 'text' || mode === 'markdown') {
+          const maxTextBytes = 512 * 1024;
+          const fileSize = Number.isFinite(Number(file.size)) ? Number(file.size) : 0;
+          const opts = fileSize > maxTextBytes ? { headers: { Range: 'bytes=0-' + (maxTextBytes - 1) } } : {};
+          const res = await this.apiFetch(previewUrl, opts);
+          if (!res) {
+            this.previewModal.loading = false;
+            return;
+          }
+          if (!res.ok && res.status !== 206) throw new Error('Preview API returned ' + res.status);
           const text = await res.text();
+          const truncated = fileSize > maxTextBytes;
+          const note = truncated
+            ? '<div class="preview-note">文件较大，仅显示前 ' + this.formatBytes(maxTextBytes) + '</div>'
+            : '';
 
-          if (file.name.endsWith('.md')) {
+          if (mode === 'markdown') {
             const markedReady = await this.ensureMarkedReady();
-            this.previewModal.content = '<div class="preview-markdown">' + (markedReady ? window.marked.parse(text) : '<pre>' + this._escHtml(text) + '</pre>') + '</div>';
+            this.previewModal.content = note + '<div class="preview-markdown">' + (markedReady ? window.marked.parse(text) : '<pre>' + this._escHtml(text) + '</pre>') + '</div>';
           } else {
-            const ext = (file.name.split('.').pop() || '').toLowerCase();
-            const langMap = {js:'javascript',ts:'typescript',py:'python',rb:'ruby',rs:'rust',sh:'bash',yml:'yaml',md:'markdown',jsx:'jsx',tsx:'tsx'};
-            const lang = langMap[ext] || ext;
+            const lang = this.getPreviewLanguage(file.name);
             const prismReady = await this.ensurePrismReady();
-            this.previewModal.content = '<pre class="preview-code"><code class="language-' + this._escAttr(lang || 'plain') + '">' + this._escHtml(text) + '</code></pre>';
+            this.previewModal.content = note + '<pre class="preview-code"><code class="language-' + this._escAttr(lang || 'plain') + '">' + this._escHtml(text) + '</code></pre>';
             if (prismReady && typeof this.$nextTick === 'function') {
               this.$nextTick(() => {
                 try {
@@ -1426,19 +1527,37 @@ function cloudvault() {
     },
 
     openLightbox(file) {
-      const images = this.filteredFiles.filter(f => f.type.startsWith('image/'));
+      const images = this.filteredFiles.filter(f => this.getFilePreviewMode(f) === 'image');
       const idx = images.findIndex(f => f.id === file.id);
       this.lightbox = { show: true, images, currentIndex: idx >= 0 ? idx : 0 };
+      this.preloadLightboxNeighbors();
     },
 
     lightboxPrev() {
       if (this.lightbox.images.length === 0) return;
       this.lightbox.currentIndex = (this.lightbox.currentIndex - 1 + this.lightbox.images.length) % this.lightbox.images.length;
+      this.preloadLightboxNeighbors();
     },
 
     lightboxNext() {
       if (this.lightbox.images.length === 0) return;
       this.lightbox.currentIndex = (this.lightbox.currentIndex + 1) % this.lightbox.images.length;
+      this.preloadLightboxNeighbors();
+    },
+
+    preloadLightboxNeighbors() {
+      const images = Array.isArray(this.lightbox.images) ? this.lightbox.images : [];
+      if (images.length <= 1) return;
+
+      this._lightboxPreloadImages = [-1, 1]
+        .map(offset => images[(this.lightbox.currentIndex + offset + images.length) % images.length])
+        .filter(Boolean)
+        .map(file => {
+          const image = new Image();
+          image.decoding = 'async';
+          image.src = '/api/files/' + encodeURIComponent(file.id) + '/preview';
+          return image;
+        });
     },
 
     async downloadZip() {
@@ -1593,6 +1712,7 @@ function cloudvault() {
           this.settingsModal.showLoginButton = data.showLoginButton !== false;
           this.settingsModal.siteName = data.siteName || 'CloudVault';
           this.settingsModal.siteIconUrl = data.siteIconUrl || '';
+          this.settingsModal.allowedUploadExtensions = data.allowedUploadExtensions || '';
           this.settingsModal._iconError = false;
         }
       } catch { /* use defaults */ }
@@ -1608,9 +1728,19 @@ function cloudvault() {
             showLoginButton: this.settingsModal.showLoginButton,
             siteName: this.settingsModal.siteName,
             siteIconUrl: this.settingsModal.siteIconUrl,
+            allowedUploadExtensions: this.settingsModal.allowedUploadExtensions,
           }),
         });
         if (res && res.ok) {
+          const data = await res.json().catch(() => null);
+          if (data && typeof data === 'object') {
+            this.settingsModal.guestPageEnabled = data.guestPageEnabled === true;
+            this.settingsModal.showLoginButton = data.showLoginButton !== false;
+            this.settingsModal.siteName = data.siteName || 'CloudVault';
+            this.settingsModal.siteIconUrl = data.siteIconUrl || '';
+            this.settingsModal.allowedUploadExtensions = data.allowedUploadExtensions || '';
+            this.settingsModal._iconError = false;
+          }
           this._branding.siteName = this.settingsModal.siteName || 'CloudVault';
           this._branding.siteIconUrl = this.settingsModal.siteIconUrl || '';
           document.title = this._branding.siteName;
@@ -1899,10 +2029,11 @@ function cloudvault() {
     },
 
     getFileCategory(type, name) {
-      if (!type) return 'other';
-      if (type.startsWith('image/')) return 'images';
-      if (type.startsWith('video/')) return 'videos';
-      if (type.startsWith('audio/')) return 'audio';
+      const n = (name || '').toLowerCase();
+      type = type || '';
+      if (type.startsWith('image/') || n.match(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/)) return 'images';
+      if (type.startsWith('video/') || n.match(/\.(mp4|webm|ogv|mov|m4v|mkv|avi|mpeg|mpg|3gp)$/)) return 'videos';
+      if (type.startsWith('audio/') || n.match(/\.(mp3|wav|ogg|oga|m4a|aac|flac|opus)$/)) return 'audio';
       if (type === 'application/pdf' || type.includes('document') || type.includes('spreadsheet') ||
           name?.match(/\.(doc|docx|xls|xlsx|ppt|pptx|csv)$/i)) return 'documents';
       if (type.includes('zip') || type.includes('tar') || type.includes('gzip') || type.includes('rar') ||
@@ -1913,11 +2044,11 @@ function cloudvault() {
     },
 
     getFileIcon(type, name) {
-      if (!type) return '\uD83D\uDCC4';
+      type = type || '';
       const n = (name || '').toLowerCase();
-      if (type.startsWith('image/')) return '\uD83D\uDDBC\uFE0F';
-      if (type.startsWith('video/')) return '\uD83C\uDFAC';
-      if (type.startsWith('audio/')) return '\uD83C\uDFB5';
+      if (type.startsWith('image/') || n.match(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/)) return '\uD83D\uDDBC\uFE0F';
+      if (type.startsWith('video/') || n.match(/\.(mp4|webm|ogv|mov|m4v|mkv|avi|mpeg|mpg|3gp)$/)) return '\uD83C\uDFAC';
+      if (type.startsWith('audio/') || n.match(/\.(mp3|wav|ogg|oga|m4a|aac|flac|opus)$/)) return '\uD83C\uDFB5';
       if (type === 'application/pdf') return '\uD83D\uDCC4';
       if (type.includes('zip') || type.includes('tar') || type.includes('gzip') || type.includes('rar') ||
           type.includes('x-7z') || n.match(/\.(zip|tar|gz|rar|7z|bz2|xz|tgz)$/)) return '\uD83D\uDCE6';

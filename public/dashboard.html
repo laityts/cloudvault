@@ -224,10 +224,10 @@
               <!-- 序号标签（右上角） -->
               <div class="absolute top-2 right-2 w-5 h-5 rounded-full bg-accent-600 text-white text-xs flex items-center justify-center font-bold" x-text="index + 1" style="z-index: 5;"></div>
               <div class="file-card-cover w-full aspect-square rounded-lg flex items-center justify-center mb-2 overflow-hidden" style="background:var(--bg-tertiary)">
-                <template x-if="file.type.startsWith('image/')">
-                  <img :src="'/api/files/' + file.id + '/thumbnail'" class="w-full h-full object-contain" loading="lazy" @error="$el.style.display='none'">
+                <template x-if="getFilePreviewMode(file) === 'image'">
+                  <img :src="'/api/files/' + encodeURIComponent(file.id) + '/thumbnail'" class="w-full h-full object-contain" loading="lazy" decoding="async" fetchpriority="low" @load="$el.classList.add('loaded')" @error="$el.style.display='none'">
                 </template>
-                <template x-if="!file.type.startsWith('image/')">
+                <template x-if="getFilePreviewMode(file) !== 'image'">
                   <span class="file-card-icon" x-html="getFileIcon(file.type, file.name)"></span>
                 </template>
               </div>
@@ -460,6 +460,12 @@
           </div>
         </div>
 
+        <div>
+          <label class="block text-sm font-medium mb-1">允许上传后缀</label>
+          <textarea x-model="settingsModal.allowedUploadExtensions" rows="2" placeholder=".jpg, .png, .mp4, .txt" class="w-full text-sm resize-none"></textarea>
+          <p class="text-xs mt-0.5" style="color:var(--text-muted)">留空表示不限制；多个后缀可用逗号、空格或换行分隔</p>
+        </div>
+
         <div class="border-t pt-4" style="border-color:var(--border)">
           <label class="flex items-center justify-between cursor-pointer">
             <div>
@@ -660,7 +666,7 @@
       <svg class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
     </button>
     <div class="lightbox-content">
-      <img :src="lightbox.images[lightbox.currentIndex] ? '/api/files/' + lightbox.images[lightbox.currentIndex].id + '/preview' : ''" class="lightbox-img" @click.stop>
+      <img :src="lightbox.images[lightbox.currentIndex] ? '/api/files/' + encodeURIComponent(lightbox.images[lightbox.currentIndex].id) + '/preview' : ''" class="lightbox-img" decoding="async" fetchpriority="high" @click.stop>
     </div>
     <button @click="lightboxNext()" class="lightbox-nav lightbox-next">
       <svg class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
@@ -802,73 +808,103 @@
 
   <!-- 分享管理模态框 -->
   <div x-show="sharesModal.show" x-transition class="modal-backdrop" @click.self="sharesModal.show = false">
-    <div class="modal-content" style="max-width: 800px; width: 90%;">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold">分享管理</h3>
-        <button @click="sharesModal.show = false" class="p-1.5 rounded-lg hover:bg-gray-700">
+    <div class="modal-content shares-manager-panel">
+      <div class="shares-manager-header">
+        <div>
+          <p class="shares-manager-kicker">分享管理</p>
+          <h3>外链与文件夹分享</h3>
+          <p class="shares-manager-subtitle">当前已创建的分享链接</p>
+        </div>
+        <button @click="sharesModal.show = false" class="icon-action" aria-label="关闭分享管理">
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
         </button>
       </div>
 
-      <div class="flex border-b mb-4" style="border-color:var(--border)">
-        <button class="px-4 py-2 text-sm font-medium" :class="sharesModal.tab === 'files' ? 'text-accent-400 border-b-2 border-accent-400' : ''" @click="sharesModal.tab = 'files'">文件分享</button>
-        <button class="px-4 py-2 text-sm font-medium" :class="sharesModal.tab === 'folders' ? 'text-accent-400 border-b-2 border-accent-400' : ''" @click="sharesModal.tab = 'folders'">文件夹分享</button>
+      <div class="shares-manager-summary">
+        <article>
+          <span>文件分享</span>
+          <strong x-text="sharesModal.files.length"></strong>
+        </article>
+        <article>
+          <span>文件夹分享</span>
+          <strong x-text="sharesModal.folders.length"></strong>
+        </article>
       </div>
 
-      <div x-show="sharesModal.loading" class="py-8 text-center">
+      <div class="shares-manager-tabs" role="tablist">
+        <button class="share-tab" :class="sharesModal.tab === 'files' ? 'active' : ''" @click="sharesModal.tab = 'files'" type="button">
+          <span>文件分享</span>
+          <small x-text="sharesModal.files.length"></small>
+        </button>
+        <button class="share-tab" :class="sharesModal.tab === 'folders' ? 'active' : ''" @click="sharesModal.tab = 'folders'" type="button">
+          <span>文件夹分享</span>
+          <small x-text="sharesModal.folders.length"></small>
+        </button>
+      </div>
+
+      <div x-show="sharesModal.loading" class="shares-manager-loading">
         <svg class="spinner w-6 h-6 mx-auto text-accent-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
       </div>
 
-      <div x-show="!sharesModal.loading && sharesModal.tab === 'files'" class="max-h-96 overflow-y-auto">
+      <div x-show="!sharesModal.loading && sharesModal.tab === 'files'" class="shares-manager-list">
         <template x-if="sharesModal.files.length === 0">
-          <p class="text-sm text-center py-8" style="color:var(--text-muted)">暂无文件分享链接</p>
+          <div class="share-empty-state">
+            <p>暂无文件分享链接</p>
+          </div>
         </template>
         <template x-for="share in sharesModal.files" :key="share.id">
-          <div class="flex items-center gap-3 p-3 border-b last:border-b-0" style="border-color:var(--border)">
-            <div class="flex-1 min-w-0">
-              <p class="text-sm font-medium truncate" x-text="share.name"></p>
-              <p class="text-xs" style="color:var(--text-muted)" x-text="'位置：' + (share.folder === 'root' ? '/' : share.folder)"></p>
-              <div class="flex items-center gap-2 mt-1 text-xs" style="color:var(--text-muted)">
-                <span x-show="share.hasPassword">🔒 密码保护</span>
+          <article class="share-manage-card">
+            <span class="share-manage-icon" x-html="getFileIcon(share.type, share.name)"></span>
+            <div class="share-manage-main">
+              <p class="share-manage-title" x-text="share.name"></p>
+              <p class="share-manage-path" x-text="'位置：' + (share.folder === 'root' ? '/' : share.folder)"></p>
+              <div class="share-manage-meta">
+                <span x-show="share.hasPassword" class="share-meta-pill">密码保护</span>
                 <span x-show="share.expiresAt" x-text="'过期：' + new Date(share.expiresAt).toLocaleString()"></span>
                 <span x-text="share.downloads + ' 次下载'"></span>
               </div>
             </div>
-            <div class="flex items-center gap-1">
-              <button @click="copyShareLink(share.shareToken)" class="p-1.5 rounded hover:bg-gray-700" title="复制链接">
+            <div class="share-manage-actions">
+              <button @click="copyShareLink(share.shareToken)" class="share-icon-btn" title="复制链接" aria-label="复制链接">
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.857-9.858a4.5 4.5 0 00-6.364 0l-4.5 4.5a4.5 4.5 0 006.364 6.364l1.757-1.757"/></svg>
               </button>
-              <button @click="revokeFileShare(share.id)" class="p-1.5 rounded hover:bg-red-900/20 text-red-400" title="撤销链接">
+              <button @click="revokeFileShare(share.id)" class="share-icon-btn danger" title="撤销链接" aria-label="撤销链接">
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
               </button>
             </div>
-          </div>
+          </article>
         </template>
       </div>
 
-      <div x-show="!sharesModal.loading && sharesModal.tab === 'folders'" class="max-h-96 overflow-y-auto">
+      <div x-show="!sharesModal.loading && sharesModal.tab === 'folders'" class="shares-manager-list">
         <template x-if="sharesModal.folders.length === 0">
-          <p class="text-sm text-center py-8" style="color:var(--text-muted)">暂无文件夹分享链接</p>
+          <div class="share-empty-state">
+            <p>暂无文件夹分享链接</p>
+          </div>
         </template>
         <template x-for="share in sharesModal.folders" :key="share.token">
-          <div class="flex items-center gap-3 p-3 border-b last:border-b-0" style="border-color:var(--border)">
-            <div class="flex-1 min-w-0">
-              <p class="text-sm font-medium truncate" x-text="share.folder"></p>
-              <div class="flex items-center gap-2 mt-1 text-xs" style="color:var(--text-muted)">
-                <span x-show="share.hasPassword">🔒 密码保护</span>
+          <article class="share-manage-card">
+            <span class="share-manage-icon folder">
+              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/></svg>
+            </span>
+            <div class="share-manage-main">
+              <p class="share-manage-title" x-text="share.folder"></p>
+              <p class="share-manage-path">文件夹分享</p>
+              <div class="share-manage-meta">
+                <span x-show="share.hasPassword" class="share-meta-pill">密码保护</span>
                 <span x-show="share.expiresAt" x-text="'过期：' + new Date(share.expiresAt).toLocaleString()"></span>
                 <span x-text="'创建于：' + new Date(share.createdAt).toLocaleDateString()"></span>
               </div>
             </div>
-            <div class="flex items-center gap-1">
-              <button @click="copyShareLink(share.token)" class="p-1.5 rounded hover:bg-gray-700" title="复制链接">
+            <div class="share-manage-actions">
+              <button @click="copyShareLink(share.token)" class="share-icon-btn" title="复制链接" aria-label="复制链接">
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.857-9.858a4.5 4.5 0 00-6.364 0l-4.5 4.5a4.5 4.5 0 006.364 6.364l1.757-1.757"/></svg>
               </button>
-              <button @click="revokeFolderShare(share.folder)" class="p-1.5 rounded hover:bg-red-900/20 text-red-400" title="撤销链接">
+              <button @click="revokeFolderShare(share.folder)" class="share-icon-btn danger" title="撤销链接" aria-label="撤销链接">
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
               </button>
             </div>
-          </div>
+          </article>
         </template>
       </div>
     </div>

@@ -3,10 +3,46 @@ import { error, getPreviewType, fetchAssetHtml, injectBranding, getMimeType } fr
 import { verifySharePassword, resolveFolderShareToken, browseFolderShareLink, getSharedFolders, getExcludedFolders, isFolderShared } from '../api/share';
 import { getSettings } from '../api/settings';
 
+type ByteRange = {
+  start: number;
+  end: number;
+};
+
 function extractToken(url: URL): string | null {
   const parts = url.pathname.split('/');
   const sIdx = parts.indexOf('s');
   return sIdx >= 0 && parts[sIdx + 1] ? parts[sIdx + 1] : null;
+}
+
+function parseByteRange(rangeHeader: string, totalSize: number): ByteRange | 'unsatisfiable' | null {
+  const match = rangeHeader.trim().match(/^bytes=(\d*)-(\d*)$/);
+  if (!match) return null;
+  if (!match[1] && !match[2]) return null;
+
+  let start: number;
+  let end: number;
+
+  if (!match[1]) {
+    const suffixLength = Number.parseInt(match[2], 10);
+    if (!Number.isInteger(suffixLength) || suffixLength <= 0) return 'unsatisfiable';
+    start = Math.max(totalSize - suffixLength, 0);
+    end = totalSize - 1;
+  } else {
+    start = Number.parseInt(match[1], 10);
+    end = match[2] ? Number.parseInt(match[2], 10) : totalSize - 1;
+  }
+
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) {
+    return 'unsatisfiable';
+  }
+  if (start >= totalSize) return 'unsatisfiable';
+  return { start, end: Math.min(end, totalSize - 1) };
+}
+
+function getStoredContentType(meta: Pick<FileMeta, 'name' | 'type'>): string {
+  const type = typeof meta.type === 'string' ? meta.type : '';
+  if (type && type !== 'application/octet-stream') return type;
+  return getMimeType(meta.name);
 }
 
 // 修改：仅返回已完成上传的文件
@@ -151,17 +187,73 @@ export async function handleFolderSharePreview(request: Request, env: Env): Prom
     return error('File not in shared folder', 403);
   }
 
+  const rangeHeader = request.headers.get('Range');
+  if (rangeHeader) {
+    return handleInlinePreviewRange(request, env, meta, 'public, max-age=14400, s-maxage=86400');
+  }
+
   const object = await env.VAULT_BUCKET.get(meta.key);
   if (!object) return error('File not found in storage', 404);
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
-  headers.set('Content-Type', meta.type || 'application/octet-stream');
+  headers.set('Content-Type', getStoredContentType(meta));
   headers.set('Content-Disposition', 'inline');
   headers.set('Cache-Control', 'public, max-age=14400, s-maxage=86400');
+  headers.set('Accept-Ranges', 'bytes');
+  headers.set('Content-Length', String(object.size));
 
   return new Response(object.body, { headers });
+}
+
+async function handleInlinePreviewRange(
+  request: Request,
+  env: Env,
+  meta: FileMeta,
+  cacheControl: string,
+): Promise<Response> {
+  const rangeHeader = request.headers.get('Range') || '';
+  const head = await env.VAULT_BUCKET.head(meta.key);
+  if (!head) return error('File not found in storage', 404);
+
+  const parsedRange = parseByteRange(rangeHeader, head.size);
+  if (parsedRange === 'unsatisfiable') {
+    return new Response('Range Not Satisfiable', {
+      status: 416,
+      headers: { 'Content-Range': 'bytes */' + head.size },
+    });
+  }
+  if (!parsedRange) {
+    const object = await env.VAULT_BUCKET.get(meta.key);
+    if (!object) return error('File not found in storage', 404);
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    headers.set('etag', object.httpEtag);
+    headers.set('Content-Type', getStoredContentType(meta));
+    headers.set('Content-Disposition', 'inline');
+    headers.set('Cache-Control', cacheControl);
+    headers.set('Accept-Ranges', 'bytes');
+    headers.set('Content-Length', String(object.size));
+    return new Response(object.body, { headers });
+  }
+
+  const length = parsedRange.end - parsedRange.start + 1;
+  const object = await env.VAULT_BUCKET.get(meta.key, {
+    range: { offset: parsedRange.start, length },
+  });
+  if (!object) return error('File not found in storage', 404);
+
+  const headers = new Headers();
+  head.writeHttpMetadata(headers);
+  headers.set('etag', head.httpEtag);
+  headers.set('Content-Type', getStoredContentType(meta));
+  headers.set('Content-Disposition', 'inline');
+  headers.set('Cache-Control', cacheControl);
+  headers.set('Accept-Ranges', 'bytes');
+  headers.set('Content-Range', 'bytes ' + parsedRange.start + '-' + parsedRange.end + '/' + head.size);
+  headers.set('Content-Length', String(length));
+  return new Response(object.body, { status: 206, headers });
 }
 
 async function serveShareHtml(env: Env, request: Request, fileData: Record<string, unknown>): Promise<Response> {
@@ -229,16 +321,7 @@ export async function handlePreview(request: Request, env: Env): Promise<Respons
   const rangeHeader = request.headers.get('Range');
 
   if (rangeHeader) {
-    const object = await env.VAULT_BUCKET.get(result.meta.key);
-    if (!object) return error('File not found', 404);
-
-    const headers = new Headers();
-    object.writeHttpMetadata(headers);
-    headers.set('etag', object.httpEtag);
-    headers.set('Content-Type', result.meta.type || 'application/octet-stream');
-    headers.set('Accept-Ranges', 'bytes');
-
-    return handleRangeRequest(request, env, result.meta, object, headers);
+    return handleInlinePreviewRange(request, env, result.meta, 'public, max-age=14400, s-maxage=86400');
   }
 
   const object = await env.VAULT_BUCKET.get(result.meta.key);
@@ -247,10 +330,11 @@ export async function handlePreview(request: Request, env: Env): Promise<Respons
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
-  headers.set('Content-Type', result.meta.type || 'application/octet-stream');
+  headers.set('Content-Type', getStoredContentType(result.meta));
   headers.set('Content-Disposition', 'inline');
   headers.set('Cache-Control', 'public, max-age=14400, s-maxage=86400');
   headers.set('Accept-Ranges', 'bytes');
+  headers.set('Content-Length', String(object.size));
 
   return new Response(object.body, { headers });
 }

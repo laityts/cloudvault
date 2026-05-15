@@ -360,9 +360,29 @@ class UploadManager {
     return fallbackMessage;
   }
 
+  getTerminalUploadMessage(payload, fallbackMessage) {
+    const message = this.getResponseMessage(payload, fallbackMessage);
+    const allowedExtensions = Array.isArray(payload?.allowedExtensions)
+      ? payload.allowedExtensions.filter(ext => typeof ext === 'string' && ext.trim())
+      : [];
+
+    if (allowedExtensions.length === 0) {
+      return message;
+    }
+
+    return message + '，允许后缀：' + allowedExtensions.join(', ');
+  }
+
   createSkippedUploadError(payload, fallbackMessage = '目标目录已存在同名文件，已跳过上传') {
     const error = new Error(this.getResponseMessage(payload, fallbackMessage));
     error.skipUpload = true;
+    error.payload = payload || null;
+    return error;
+  }
+
+  createTerminalUploadError(payload, fallbackMessage = '上传请求不符合当前设置') {
+    const error = new Error(this.getTerminalUploadMessage(payload, fallbackMessage));
+    error.terminalUpload = true;
     error.payload = payload || null;
     return error;
   }
@@ -395,7 +415,7 @@ class UploadManager {
 
     const payload = await this.readResponsePayload(response);
     if (!response.ok) {
-      throw new Error(this.getResponseMessage(payload, '上传预检查失败'));
+      throw this.createTerminalUploadError(payload, '上传预检查失败');
     }
 
     return payload?.exists === true ? payload : null;
@@ -473,13 +493,6 @@ class UploadManager {
     const maxSize = 10 * 1024 * 1024 * 1024;
     if (!Number.isFinite(file.size) || file.size < 0 || file.size > maxSize) {
       return { valid: false, message: '文件大小超出限制' };
-    }
-
-    const dotIndex = file.name.lastIndexOf('.');
-    const ext = dotIndex >= 0 ? file.name.slice(dotIndex).toLowerCase() : '';
-    const forbiddenExt = ['.exe', '.sh', '.bat', '.cmd', '.vbs', '.ps1'];
-    if (ext && forbiddenExt.includes(ext)) {
-      return { valid: false, message: '该文件类型不允许上传' };
     }
 
     if (!file.name || file.name.includes('/') || file.name.includes('\\')) {
@@ -743,6 +756,22 @@ class UploadManager {
         return;
       }
 
+      if (error?.terminalUpload) {
+        item.status = 'error';
+        item.controller = null;
+        item.xhr = null;
+        item.speed = 0;
+        item.eta = 0;
+        item.errorMessage = error.message || '上传请求不符合当前设置';
+        await this.saveToStorage(item);
+        this.dispatch('upload-error', {
+          name: item.name,
+          error: item.errorMessage,
+        });
+        this.dispatch('upload-queue-changed');
+        return;
+      }
+
       item.retryCount = (item.retryCount || 0) + 1;
       item.errorMessage = error?.message || '上传失败';
       item.controller = null;
@@ -802,6 +831,10 @@ class UploadManager {
             reject(this.createSkippedUploadError(payload));
             return;
           }
+          if (xhr.status >= 400 && xhr.status < 500) {
+            reject(this.createTerminalUploadError(payload, xhr.responseText || '上传失败'));
+            return;
+          }
           reject(new Error(this.getResponseMessage(payload, xhr.responseText || '上传失败')));
         }
       };
@@ -838,6 +871,9 @@ class UploadManager {
     if (!response.ok) {
       if (response.status === 409 && (data?.skipped === true || data?.exists === true)) {
         throw this.createSkippedUploadError(data);
+      }
+      if (response.status >= 400 && response.status < 500) {
+        throw this.createTerminalUploadError(data, '初始化分片上传失败');
       }
       throw new Error(this.getResponseMessage(data, '初始化分片上传失败'));
     }

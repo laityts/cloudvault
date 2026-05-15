@@ -1,9 +1,9 @@
 import { Env } from '../utils/types';
-import { json, error } from '../utils/response';
+import { json } from '../utils/response';
 
 export async function listFileShares(request: Request, env: Env): Promise<Response> {
   const rows = await env.DB.prepare(
-    `SELECT id, name, folder, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads
+    `SELECT id, name, type, folder, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads
      FROM files
      WHERE share_token IS NOT NULL
      ORDER BY share_expires_at ASC, name ASC`
@@ -12,6 +12,7 @@ export async function listFileShares(request: Request, env: Env): Promise<Respon
   const shares = rows.results.map(row => ({
     id: row.id,
     name: row.name,
+    type: row.type,
     folder: row.folder,
     shareToken: row.shareToken,
     hasPassword: !!row.sharePassword,

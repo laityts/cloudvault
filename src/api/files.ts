@@ -1,6 +1,7 @@
 import { Env, FileMeta } from '../utils/types';
 import { json, error, getMimeType } from '../utils/response';
 import { getSharedFolders, getExcludedFolders, isFolderShared } from './share';
+import { getAllowedUploadExtensionList, getSettings } from './settings';
 
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
 
@@ -13,6 +14,16 @@ type UploadConflictResult = {
   exists: boolean;
   reason?: string;
   file?: Partial<FileMeta> | null;
+};
+
+type UploadExtensionCheck = {
+  allowed: boolean;
+  allowedExtensions: string[];
+};
+
+type ByteRange = {
+  start: number;
+  end: number;
 };
 
 function safeDecodeHeaderValue(value: string | null, fallback: string): string {
@@ -44,9 +55,18 @@ function parseUploadRequestMeta(request: Request): { fileName: string; folder: s
   const fileName = normalizeFileName(safeDecodeHeaderValue(request.headers.get('X-File-Name'), 'untitled'));
   const folder = normalizeFolderPath(safeDecodeHeaderValue(request.headers.get('X-Folder'), 'root'));
   if (!fileName || !folder) return null;
-  const contentType = request.headers.get('Content-Type') || getMimeType(fileName);
+  const headerContentType = request.headers.get('Content-Type') || '';
+  const contentType = headerContentType && headerContentType !== 'application/octet-stream'
+    ? headerContentType
+    : getMimeType(fileName);
   const key = folder === 'root' ? fileName : folder + '/' + fileName;
   return { fileName, folder, contentType, key };
+}
+
+function getStoredContentType(meta: Pick<FileMeta, 'name' | 'type'>): string {
+  const type = typeof meta.type === 'string' ? meta.type : '';
+  if (type && type !== 'application/octet-stream') return type;
+  return getMimeType(meta.name);
 }
 
 function normalizeMultipartParts(parts: unknown): MultipartPart[] {
@@ -80,6 +100,31 @@ function extractId(url: URL): string | null {
   const parts = url.pathname.split('/');
   const idx = parts.indexOf('files');
   return idx >= 0 && parts[idx + 1] ? parts[idx + 1] : null;
+}
+
+function parseByteRange(rangeHeader: string, totalSize: number): ByteRange | 'unsatisfiable' | null {
+  const match = rangeHeader.trim().match(/^bytes=(\d*)-(\d*)$/);
+  if (!match) return null;
+  if (!match[1] && !match[2]) return null;
+
+  let start: number;
+  let end: number;
+
+  if (!match[1]) {
+    const suffixLength = Number.parseInt(match[2], 10);
+    if (!Number.isInteger(suffixLength) || suffixLength <= 0) return 'unsatisfiable';
+    start = Math.max(totalSize - suffixLength, 0);
+    end = totalSize - 1;
+  } else {
+    start = Number.parseInt(match[1], 10);
+    end = match[2] ? Number.parseInt(match[2], 10) : totalSize - 1;
+  }
+
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) {
+    return 'unsatisfiable';
+  }
+  if (start >= totalSize) return 'unsatisfiable';
+  return { start, end: Math.min(end, totalSize - 1) };
 }
 
 // 计算文件哈希
@@ -234,6 +279,25 @@ function uploadConflictResponse(conflict: UploadConflictResult): Response {
   }, 409);
 }
 
+async function checkUploadExtension(env: Env, fileName: string): Promise<UploadExtensionCheck> {
+  const settings = await getSettings(env);
+  const allowedExtensions = getAllowedUploadExtensionList(settings);
+  if (allowedExtensions.length === 0) return { allowed: true, allowedExtensions };
+  const lowerName = fileName.toLowerCase();
+  return {
+    allowed: allowedExtensions.some(ext => lowerName.endsWith(ext)),
+    allowedExtensions,
+  };
+}
+
+function uploadExtensionBlockedResponse(allowedExtensions: string[]): Response {
+  return json({
+    allowed: false,
+    reason: '该文件后缀不允许上传',
+    allowedExtensions,
+  }, 415);
+}
+
 async function updateStatsCounters(env: Env, sizeDelta: number, countDelta: number): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO stats (id, total_files, total_size) VALUES (1, ?, ?)
@@ -274,11 +338,16 @@ async function handleUploadCheck(request: Request, env: Env): Promise<Response> 
   const uploadMeta = parseUploadRequestMeta(request);
   if (!uploadMeta) return error('Invalid upload target', 400);
 
+  const extensionCheck = await checkUploadExtension(env, uploadMeta.fileName);
+  if (!extensionCheck.allowed) return uploadExtensionBlockedResponse(extensionCheck.allowedExtensions);
+
   const conflict = await checkUploadConflict(env, uploadMeta);
   return json({
+    allowed: true,
     exists: conflict.exists,
     skipped: conflict.exists,
     reason: conflict.reason || '',
+    allowedExtensions: extensionCheck.allowedExtensions,
     file: conflict.file || null,
   });
 }
@@ -289,6 +358,9 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
   if (!request.body) return error('Upload body required', 400);
 
   const { fileName, folder, contentType, key } = uploadMeta;
+  const extensionCheck = await checkUploadExtension(env, fileName);
+  if (!extensionCheck.allowed) return uploadExtensionBlockedResponse(extensionCheck.allowedExtensions);
+
   const conflict = await checkUploadConflict(env, uploadMeta);
   if (conflict.exists) return uploadConflictResponse(conflict);
 
@@ -358,6 +430,9 @@ async function handleMultipartCreate(request: Request, env: Env): Promise<Respon
   const { fileName, folder, contentType, key } = uploadMeta;
   const fileSize = parseInt(request.headers.get('X-File-Size') || '0', 10);
   if (!Number.isFinite(fileSize) || fileSize < 0) return error('Invalid file size', 400);
+
+  const extensionCheck = await checkUploadExtension(env, fileName);
+  if (!extensionCheck.allowed) return uploadExtensionBlockedResponse(extensionCheck.allowedExtensions);
 
   const conflict = await checkUploadConflict(env, uploadMeta);
   if (conflict.exists) return uploadConflictResponse(conflict);
@@ -961,13 +1036,17 @@ export async function thumbnail(request: Request, env: Env): Promise<Response> {
   const id = parts[parts.indexOf('files') + 1];
   if (!id) return error('File ID required', 400);
   const meta = await getFileById(env, id);
-  if (!meta || !meta.type.startsWith('image/')) return error('Not an image', 400);
+  if (!meta) return error('File not found', 404);
+  const contentType = getStoredContentType(meta);
+  if (!contentType.startsWith('image/')) return error('Not an image', 400);
   const object = await env.VAULT_BUCKET.get(meta.key);
   if (!object) return error('File not found in storage', 404);
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
-  headers.set('Cache-Control', 'public, max-age=14400, s-maxage=86400');
+  headers.set('Content-Type', contentType);
+  headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+  headers.set('Content-Disposition', 'inline; filename="' + encodeURIComponent(meta.name) + '"');
   return new Response(object.body, { headers });
 }
 
@@ -978,30 +1057,49 @@ export async function preview(request: Request, env: Env): Promise<Response> {
   if (!id) return error('File ID required', 400);
   const meta = await getFileById(env, id);
   if (!meta) return error('File not found', 404);
+  const contentType = getStoredContentType(meta);
   const rangeHeader = request.headers.get('Range');
+  if (rangeHeader) {
+    const head = await env.VAULT_BUCKET.head(meta.key);
+    if (!head) return error('File not found in storage', 404);
+
+    const parsedRange = parseByteRange(rangeHeader, head.size);
+    if (parsedRange === 'unsatisfiable') {
+      return new Response('Range Not Satisfiable', {
+        status: 416,
+        headers: { 'Content-Range': 'bytes */' + head.size },
+      });
+    }
+
+    if (parsedRange) {
+      const length = parsedRange.end - parsedRange.start + 1;
+      const object = await env.VAULT_BUCKET.get(meta.key, {
+        range: { offset: parsedRange.start, length },
+      });
+      if (!object) return error('File not found in storage', 404);
+
+      const headers = new Headers();
+      head.writeHttpMetadata(headers);
+      headers.set('etag', head.httpEtag);
+      headers.set('Content-Type', contentType);
+      headers.set('Content-Disposition', 'inline; filename="' + encodeURIComponent(meta.name) + '"');
+      headers.set('Cache-Control', 'private, max-age=14400, stale-while-revalidate=86400');
+      headers.set('Accept-Ranges', 'bytes');
+      headers.set('Content-Range', 'bytes ' + parsedRange.start + '-' + parsedRange.end + '/' + head.size);
+      headers.set('Content-Length', String(length));
+      return new Response(object.body, { status: 206, headers });
+    }
+  }
+
   const object = await env.VAULT_BUCKET.get(meta.key);
   if (!object) return error('File not found in storage', 404);
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
-  headers.set('Content-Type', meta.type || 'application/octet-stream');
+  headers.set('Content-Type', contentType);
   headers.set('Content-Disposition', 'inline; filename="' + encodeURIComponent(meta.name) + '"');
-  headers.set('Cache-Control', 'private, max-age=3600');
+  headers.set('Cache-Control', 'private, max-age=14400, stale-while-revalidate=86400');
   headers.set('Accept-Ranges', 'bytes');
-  if (rangeHeader) {
-    const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
-    if (match) {
-      const totalSize = object.size;
-      const start = match[1] ? parseInt(match[1], 10) : 0;
-      const end = match[2] ? parseInt(match[2], 10) : totalSize - 1;
-      if (start >= totalSize || end >= totalSize || start > end) {
-        return new Response('Range Not Satisfiable', { status: 416, headers: { 'Content-Range': 'bytes */' + totalSize } });
-      }
-      headers.set('Content-Range', 'bytes ' + start + '-' + end + '/' + totalSize);
-      headers.set('Content-Length', String(end - start + 1));
-      return new Response(object.body, { status: 206, headers });
-    }
-  }
   headers.set('Content-Length', String(object.size));
   return new Response(object.body, { headers });
 }

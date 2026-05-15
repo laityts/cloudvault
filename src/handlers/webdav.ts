@@ -1,5 +1,6 @@
 import { Env, FileMeta } from '../utils/types';
 import { getMimeType } from '../utils/response';
+import { getAllowedUploadExtensionList, getSettings } from '../api/settings';
 import {
   multistatusResponse,
   propstatEntry,
@@ -29,6 +30,14 @@ function toFileName(davPath: string): string {
 
 function toR2Key(folder: string, name: string): string {
   return folder === 'root' ? name : folder + '/' + name;
+}
+
+async function isUploadExtensionAllowed(env: Env, fileName: string): Promise<boolean> {
+  const settings = await getSettings(env);
+  const allowedExtensions = getAllowedUploadExtensionList(settings);
+  if (allowedExtensions.length === 0) return true;
+  const lowerName = fileName.toLowerCase();
+  return allowedExtensions.some(ext => lowerName.endsWith(ext));
 }
 
 async function getAllFiles(env: Env): Promise<FileMeta[]> {
@@ -375,8 +384,14 @@ async function handlePut(request: Request, env: Env): Promise<Response> {
 
   const folder = toFolder(davPath);
   const fileName = toFileName(davPath);
-  const contentType = request.headers.get('Content-Type') || getMimeType(fileName);
+  const headerContentType = request.headers.get('Content-Type') || '';
+  const contentType = headerContentType && headerContentType !== 'application/octet-stream'
+    ? headerContentType
+    : getMimeType(fileName);
   const key = toR2Key(folder, fileName);
+  if (!(await isUploadExtensionAllowed(env, fileName))) {
+    return new Response('File extension is not allowed', { status: 415 });
+  }
 
   const existingFile = await findFileByDavPath(env, davPath);
 

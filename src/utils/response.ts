@@ -3,16 +3,17 @@
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-File-Name, X-Folder',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Range, X-File-Name, X-Folder, X-File-Size',
   'Access-Control-Max-Age': '86400',
 };
 
-export function json<T>(data: T, status = 200): Response {
+export function json<T>(data: T, status = 200, headers: HeadersInit = {}): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       'Content-Type': 'application/json',
       ...CORS_HEADERS,
+      ...headers,
     },
   });
 }
@@ -83,7 +84,16 @@ const MIME_MAP: Record<string, string> = {
   '.html': 'text/html',
   '.css': 'text/css',
   '.js': 'application/javascript',
+  '.mjs': 'application/javascript',
+  '.ts': 'text/typescript',
+  '.tsx': 'text/typescript',
+  '.jsx': 'text/jsx',
   '.json': 'application/json',
+  '.yaml': 'text/yaml',
+  '.yml': 'text/yaml',
+  '.toml': 'text/plain',
+  '.ini': 'text/plain',
+  '.log': 'text/plain',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -92,10 +102,22 @@ const MIME_MAP: Record<string, string> = {
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
   '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.mov': 'video/quicktime',
   '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
+  '.mpeg': 'video/mpeg',
+  '.mpg': 'video/mpeg',
+  '.3gp': 'video/3gpp',
   '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
   '.wav': 'audio/wav',
   '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
+  '.opus': 'audio/ogg',
   '.pdf': 'application/pdf',
   '.zip': 'application/zip',
   '.tar': 'application/x-tar',
@@ -122,6 +144,10 @@ const CODE_EXTENSIONS = new Set([
   '.c', '.cpp', '.h', '.hpp', '.cs', '.swift', '.kt', '.sh', '.bash',
   '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.sql', '.graphql',
 ]);
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif']);
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.ogv', '.mov', '.m4v', '.mkv', '.avi', '.mpeg', '.mpg', '.3gp']);
+const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg', '.oga', '.m4a', '.aac', '.flac', '.opus']);
+const TEXT_EXTENSIONS = new Set(['.txt', '.log', '.md', '.markdown', '.csv', '.tsv', '.json', '.jsonc', '.xml', '.html', '.htm', '.css', '.diff', '.patch']);
 
 export function getPreviewType(filename: string, mimeType: string): PreviewType {
   if (mimeType.startsWith('image/')) return 'image';
@@ -130,6 +156,11 @@ export function getPreviewType(filename: string, mimeType: string): PreviewType 
   if (mimeType === 'application/pdf') return 'pdf';
   if (mimeType.startsWith('text/')) return 'text';
   const ext = '.' + filename.split('.').pop()?.toLowerCase();
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video';
+  if (AUDIO_EXTENSIONS.has(ext)) return 'audio';
+  if (ext === '.pdf') return 'pdf';
+  if (TEXT_EXTENSIONS.has(ext)) return 'text';
   if (CODE_EXTENSIONS.has(ext)) return 'code';
   return 'none';
 }

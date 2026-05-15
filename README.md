@@ -17,6 +17,7 @@ A personal cloud storage platform built on **Cloudflare Workers + R2**. Zero ser
 **文件与文件夹管理**
 - 上传、下载、重命名、移动、删除，支持顶部工具栏文件上传、拖拽上传与 5MB 以上文件自动分片续传
 - 上传任务面板支持暂停、继续和补选原文件，刷新后可按原文件继续断点任务
+- 可按后缀白名单限制上传，普通网页上传与 WebDAV 上传规则保持一致
 - 无限嵌套文件夹，侧边栏文件夹树可展开/折叠
 - 多文件选择，批量打包 ZIP 下载
 - 级联删除 — 删除文件夹时自动删除所有子文件和子文件夹
@@ -25,6 +26,7 @@ A personal cloud storage platform built on **Cloudflare Workers + R2**. Zero ser
 - 生成分享链接，支持密码保护和过期时间
 - 文件夹级分享 — 整个文件夹设为访客可见，子文件夹自动继承
 - **分享排除** — 父文件夹已分享时，可单独关闭特定子文件夹的分享
+- 管理后台内置分享管理，可集中复制或撤销文件、文件夹分享链接
 - 分享链接支持 SEO 友好的简洁 URL（如 `/TVBOX/app.apk`）
 
 **访客文件浏览器**
@@ -49,6 +51,7 @@ A personal cloud storage platform built on **Cloudflare Workers + R2**. Zero ser
 
 **文件预览**
 - 浏览器内预览：图片、视频、音频、PDF、代码、Markdown
+- 大文件预览支持 Range 请求，音视频和大文本文件加载更平滑
 - 图片灯箱 — 全屏画廊，键盘导航
 
 **个性化**
@@ -145,6 +148,7 @@ cloudvault/
 │   ├── api/
 │   │   ├── files.ts          # 文件 CRUD、上传、下载、打包、预览
 │   │   ├── share.ts          # 分享链接、文件夹分享、访客访问
+│   │   ├── shares.ts         # 分享管理列表
 │   │   ├── settings.ts       # 站点设置
 │   │   └── stats.ts          # 存储统计
 │   ├── handlers/
@@ -203,6 +207,7 @@ cloudvault/
 **File & Folder Management**
 - Upload, download, rename, move, delete — with toolbar-based file upload, drag-and-drop, and automatic chunked resume for files larger than 5MB
 - The upload task panel supports pause, resume, and re-linking the original file so interrupted tasks can continue from the saved checkpoint
+- Uploads can be restricted by an extension allowlist, shared by both the web uploader and WebDAV
 - Unlimited nested folders with collapsible sidebar folder tree
 - Multi-select files for batch ZIP download
 - Cascade delete — deleting a folder removes all child files and sub-folders
@@ -211,6 +216,7 @@ cloudvault/
 - Generate share links with optional password protection and expiration
 - Folder-level sharing — entire folder visible to guests, sub-folders inherit automatically
 - **Share exclusion** — disable sharing on specific sub-folders even when parent is shared
+- Built-in share management lets admins review, copy, and revoke file or folder share links in one place
 - SEO-friendly clean download URLs (e.g., `/TVBOX/app.apk`)
 
 **Guest File Browser**
@@ -235,6 +241,7 @@ cloudvault/
 
 **File Preview**
 - In-browser preview: images, videos, audio, PDFs, code, Markdown
+- Range-based preview improves loading for media files and large text files
 - Image lightbox — full-screen gallery with keyboard navigation
 
 **Customization**
@@ -331,6 +338,7 @@ cloudvault/
 │   ├── api/
 │   │   ├── files.ts          # File CRUD, upload, download, zip, preview
 │   │   ├── share.ts          # Share links, folder sharing, guest access
+│   │   ├── shares.ts         # Share management listings
 │   │   ├── settings.ts       # Site settings
 │   │   └── stats.ts          # Storage statistics
 │   ├── handlers/
