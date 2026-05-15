@@ -654,6 +654,10 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
     if (!meta) return error('File not found', 404);
     return json(meta, 200);
   }
+  const currentMeta = await getFileById(env, body.fileId);
+  if (currentMeta && (!currentMeta.uploadStatus || currentMeta.uploadStatus === 'done')) {
+    return json(currentMeta, 200);
+  }
   if (row.key !== body.key || row.uploadId !== body.uploadId) return error('Upload session mismatch', 409);
   if (Number.isFinite(Number(row.uploadTotalChunks)) && normalizedParts.length !== Number(row.uploadTotalChunks)) {
     return error('Multipart upload is incomplete', 400);

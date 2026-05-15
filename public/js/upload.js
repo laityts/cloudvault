@@ -670,6 +670,29 @@ class UploadManager {
     );
   }
 
+  async finalizeCompletedUpload(item) {
+    item.status = 'done';
+    item.progress = 100;
+    item.uploadedBytes = item.size;
+    item.speed = 0;
+    item.eta = 0;
+    item.retryCount = 0;
+    item.errorMessage = '';
+    item.uploadId = null;
+    item.key = null;
+    item.fileId = null;
+    item.chunks = [];
+    item.controller = null;
+    item.xhr = null;
+    if (item._saveTimeout) {
+      window.clearTimeout(item._saveTimeout);
+      item._saveTimeout = null;
+    }
+    await this.saveToStorage(item);
+    this.dispatch('upload-complete', { name: item.name });
+    this.dispatch('upload-queue-changed');
+  }
+
   async uploadFile(item) {
     if (!item.file) {
       item.status = 'needs_file';
@@ -688,9 +711,23 @@ class UploadManager {
     item.lastLoaded = item.uploadedBytes || 0;
 
     try {
-      const conflict = await this.ensureUploadAllowed(item);
-      if (conflict) {
-        throw this.createSkippedUploadError(conflict);
+      if (item.uploadId && item.fileId) {
+        await this.syncRemoteMultipartState(item);
+        if (!this.queue.some(entry => entry.id === item.id)) {
+          return;
+        }
+        if (item.status === 'done') {
+          await this.finalizeCompletedUpload(item);
+          return;
+        }
+        item.status = 'uploading';
+      }
+
+      if (!item.uploadId || !item.fileId) {
+        const conflict = await this.ensureUploadAllowed(item);
+        if (conflict) {
+          throw this.createSkippedUploadError(conflict);
+        }
       }
 
       if (item.size < SMALL_FILE_THRESHOLD) {
@@ -709,22 +746,7 @@ class UploadManager {
         throw new DOMException('Aborted', 'AbortError');
       }
 
-      item.status = 'done';
-      item.progress = 100;
-      item.uploadedBytes = item.size;
-      item.speed = 0;
-      item.eta = 0;
-      item.retryCount = 0;
-      item.errorMessage = '';
-      item.uploadId = null;
-      item.key = null;
-      item.fileId = null;
-      item.chunks = [];
-      item.controller = null;
-      item.xhr = null;
-      await this.saveToStorage(item);
-      this.dispatch('upload-complete', { name: item.name });
-      this.dispatch('upload-queue-changed');
+      await this.finalizeCompletedUpload(item);
     } catch (error) {
       if (!this.queue.some(entry => entry.id === item.id)) {
         return;
