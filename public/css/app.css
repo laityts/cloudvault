@@ -3030,6 +3030,11 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
 
 .upload-modal-panel {
   background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: min(88dvh, 760px);
+  overflow: hidden;
 }
 
 .upload-modal-header {
@@ -3038,6 +3043,31 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 1rem;
+}
+
+.upload-modal-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.upload-modal-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.upload-modal-toolbar-note {
+  margin: 0;
+  max-width: 320px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  text-align: right;
 }
 
 .upload-modal-kicker {
@@ -3078,6 +3108,12 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
   color: var(--text-primary);
   font-size: 1.15rem;
   line-height: 1.1;
+}
+
+.upload-summary-chip small {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  line-height: 1.4;
 }
 
 .upload-summary-chip.tone-accent,
@@ -3125,8 +3161,9 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
 .upload-modal-list {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   gap: 0.85rem;
-  max-height: min(60dvh, 620px);
+  min-height: 0;
   overflow-y: auto;
   padding-right: 0.15rem;
 }
@@ -3160,12 +3197,35 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
   gap: 0.75rem;
 }
 
+.upload-task-head-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
 .upload-task-name {
   margin: 0;
   font-size: 0.96rem;
   font-weight: 600;
   line-height: 1.45;
   word-break: break-word;
+}
+
+.upload-task-path {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.upload-progress-label {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .upload-status-pill {
@@ -3192,6 +3252,13 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
   margin-top: 0.7rem;
 }
 
+.upload-task-resume-note {
+  margin: 0.55rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 .upload-task-footer {
   display: flex;
   flex-wrap: wrap;
@@ -3203,20 +3270,31 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
 
 .upload-task-actions {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: flex-start;
   gap: 0.55rem;
-  min-width: 104px;
+  min-width: 176px;
 }
 
 .upload-modal-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(12, 24, 40, 0), var(--bg-elevated) 18%);
+}
+
+.upload-modal-footer-copy {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
 }
 
 @media (max-width: 1024px) {
@@ -3251,6 +3329,16 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
     -webkit-box-orient: vertical;
     white-space: normal;
     overflow: hidden;
+  }
+
+  .upload-modal-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .upload-modal-toolbar-note {
+    max-width: none;
+    text-align: left;
   }
 
   .file-list-shell table {
@@ -3322,6 +3410,15 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
 
   .upload-task-card {
     grid-template-columns: 1fr;
+  }
+
+  .upload-task-head {
+    flex-direction: column;
+  }
+
+  .upload-task-head-meta {
+    flex-direction: row;
+    align-items: center;
   }
 
   .upload-task-actions {

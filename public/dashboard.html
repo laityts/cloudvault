@@ -113,17 +113,15 @@
                 <span class="hidden sm:inline">新建文件夹</span>
               </button>
 
-              <label class="btn-primary text-xs flex items-center gap-1 cursor-pointer">
+              <button @click="triggerFilePicker()" class="btn-primary text-xs flex items-center gap-1" type="button">
                 <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
                 <span class="hidden sm:inline">上传</span>
-                <input type="file" multiple class="hidden" @change="handleFileSelect($event)">
-              </label>
+              </button>
 
-              <label class="btn-secondary text-xs flex items-center gap-1 cursor-pointer">
+              <button @click="triggerFolderPicker()" class="btn-secondary text-xs flex items-center gap-1" type="button">
                 <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
                 <span class="hidden sm:inline">文件夹</span>
-                <input type="file" multiple webkitdirectory directory class="hidden" @change="handleFolderSelect($event)">
-              </label>
+              </button>
 
               <div class="relative category-menu" @click.outside="categoryMenuOpen = false">
                 <button
@@ -179,43 +177,6 @@
         </div>
       </div>
 
-      <section class="upload-hero">
-        <div class="upload-hero-copy">
-          <span class="upload-hero-badge">上传中心</span>
-          <h2 class="upload-hero-title">拖放即可上传，断点会自动保留</h2>
-          <p class="upload-hero-desc" x-text="uploadHeroHint"></p>
-          <div class="upload-hero-meta">
-            <span>目标目录：<strong x-text="currentFolderLabel"></strong></span>
-            <span x-text="storageUsageLabel"></span>
-          </div>
-          <div class="upload-hero-actions">
-            <label class="btn-primary text-xs flex items-center gap-1 cursor-pointer">
-              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
-              <span>选择文件</span>
-              <input type="file" multiple class="hidden" @change="handleFileSelect($event)">
-            </label>
-            <label class="btn-secondary text-xs flex items-center gap-1 cursor-pointer">
-              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
-              <span>选择文件夹</span>
-              <input type="file" multiple webkitdirectory directory class="hidden" @change="handleFolderSelect($event)">
-            </label>
-            <button @click="openUploadsModal()" class="btn-secondary text-xs flex items-center gap-1">
-              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
-              <span>查看任务</span>
-            </button>
-          </div>
-        </div>
-        <div class="upload-hero-stats">
-          <template x-for="card in uploadSummaryCards" :key="card.key">
-            <article class="upload-stat-card" :class="'tone-' + card.tone">
-              <span class="upload-stat-label" x-text="card.label"></span>
-              <strong class="upload-stat-value" x-text="card.value"></strong>
-              <span class="upload-stat-helper" x-text="card.helper"></span>
-            </article>
-          </template>
-        </div>
-      </section>
-
       <!-- 批量操作栏 -->
       <div x-show="selectedFiles.size > 0" x-transition class="selection-bar flex items-center gap-3 px-4 py-2 text-sm" style="background:var(--accent-soft)">
         <span class="font-medium" style="color:var(--accent)" x-text="selectedFiles.size + ' 已选中'"></span>
@@ -239,7 +200,7 @@
         <div x-show="!loading && currentSubfolders.length === 0 && filteredFiles.length === 0" class="empty-state">
           <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color:var(--text-muted)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/></svg>
           <p class="text-lg font-medium mb-1">暂无文件</p>
-          <p class="text-sm">拖放文件或文件夹至此处，或使用上方上传中心开始</p>
+          <p class="text-sm">拖放文件或文件夹至此处，或使用顶部工具栏开始上传</p>
         </div>
 
         <!-- 网格视图 -->
@@ -719,6 +680,11 @@
   <!-- 提示容器 -->
   <div class="toast-container" id="toast-container"></div>
 
+  <input x-ref="fileUploadInput" type="file" multiple class="sr-only" tabindex="-1" @change="handleFileSelect($event)">
+  <input x-ref="folderUploadInput" type="file" multiple webkitdirectory directory mozdirectory class="sr-only" tabindex="-1" @change="handleFolderSelect($event)">
+  <input x-ref="restoreFileInput" type="file" multiple class="sr-only" tabindex="-1" @change="handleRestoreFileSelect($event)">
+  <input x-ref="restoreFolderInput" type="file" multiple webkitdirectory directory mozdirectory class="sr-only" tabindex="-1" @change="handleRestoreFolderSelect($event)">
+
   <!-- 上传任务模态框 -->
   <div x-show="showUploadsModal" x-transition class="modal-backdrop" @click.self="showUploadsModal = false">
     <div class="modal-content upload-modal-panel" style="max-width: 920px; width: min(94vw, 920px);">
@@ -726,11 +692,33 @@
         <div>
           <p class="upload-modal-kicker">上传任务</p>
           <h3 class="text-xl font-semibold">上传队列</h3>
-          <p class="upload-modal-subtitle">支持暂停、恢复、补文件和断点续传。</p>
+          <p class="upload-modal-subtitle" x-text="uploadHeroHint"></p>
         </div>
         <button @click="showUploadsModal = false" class="icon-action" aria-label="关闭上传任务">
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
         </button>
+      </div>
+
+      <div class="upload-modal-toolbar">
+        <div class="upload-modal-toolbar-actions">
+          <button @click="triggerFilePicker()" class="btn-primary text-xs flex items-center gap-1" type="button">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+            <span>上传文件</span>
+          </button>
+          <button @click="triggerFolderPicker()" class="btn-secondary text-xs flex items-center gap-1" type="button">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+            <span>上传文件夹</span>
+          </button>
+          <button x-show="anyNeedsFile" @click="triggerRestoreFilePicker()" class="btn-secondary text-xs flex items-center gap-1" type="button">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.5 12.75l6 6 9-13.5"/></svg>
+            <span>补选文件</span>
+          </button>
+          <button x-show="uploadNeedsFolderRestore" @click="triggerRestoreFolderPicker()" class="btn-secondary text-xs flex items-center gap-1" type="button">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7.5A2.25 2.25 0 015.25 5.25h4.379a1.5 1.5 0 011.06.44l1.12 1.12a1.5 1.5 0 001.06.44h5.88A2.25 2.25 0 0121 9.5v9.25A2.25 2.25 0 0118.75 21H5.25A2.25 2.25 0 013 18.75V7.5Z"/></svg>
+            <span>补选文件夹</span>
+          </button>
+        </div>
+        <p class="upload-modal-toolbar-note" x-show="anyNeedsFile">缺少本地文件的任务会按原路径自动匹配，并从已完成分片继续。</p>
       </div>
 
       <div class="upload-modal-summary">
@@ -738,6 +726,7 @@
           <article class="upload-summary-chip" :class="'tone-' + card.tone">
             <span x-text="card.label"></span>
             <strong x-text="card.value"></strong>
+            <small x-text="card.helper"></small>
           </article>
         </template>
       </div>
@@ -753,13 +742,20 @@
           <article class="upload-task-card" :class="getUploadStatusTone(upload.status)">
             <div class="upload-task-main">
               <div class="upload-task-head">
-                <p class="upload-task-name" x-text="upload.name"></p>
-                <span class="upload-status-pill" :class="getUploadStatusTone(upload.status)" x-text="getUploadStatusLabel(upload.status)"></span>
+                <div class="min-w-0">
+                  <p class="upload-task-name" x-text="upload.name"></p>
+                  <p class="upload-task-path" x-show="upload.relativePath && upload.relativePath !== upload.name" x-text="'原路径：' + upload.relativePath"></p>
+                </div>
+                <div class="upload-task-head-meta">
+                  <span class="upload-progress-label" x-text="upload.progress + '%'"></span>
+                  <span class="upload-status-pill" :class="getUploadStatusTone(upload.status)" x-text="getUploadStatusLabel(upload.status)"></span>
+                </div>
               </div>
               <p class="upload-task-meta" x-text="'位置：' + (upload.folder === 'root' ? '/' : upload.folder) + ' · ' + formatBytes(upload.size) + ' · 已传 ' + formatBytes(upload.uploadedBytes || 0)"></p>
               <div class="progress-bar upload-task-progress">
                 <div class="fill" :style="'width:' + upload.progress + '%'"></div>
               </div>
+              <p class="upload-task-resume-note" x-text="getUploadResumeHint(upload)"></p>
               <div class="upload-task-footer">
                 <span x-text="formatBytes(upload.speed) + '/s'"></span>
                 <span x-show="upload.eta && upload.eta !== Infinity" x-text="formatTime(upload.eta) + ' 剩余'"></span>
@@ -787,6 +783,10 @@
       </div>
 
       <div class="upload-modal-footer">
+        <div class="upload-modal-footer-copy">
+          <span x-text="'共 ' + allUploads.length + ' 项任务'"></span>
+          <span x-show="anyNeedsFile" x-text="'待补文件 ' + uploadStatusCounts.needs_file + ' 项'"></span>
+        </div>
         <div class="flex gap-2 flex-wrap">
           <button @click="anyPendingOrUploading ? pauseAllUploads() : (anyPaused ? resumeAllUploads() : null)" :disabled="!anyPendingOrUploading && !anyPaused" class="btn-secondary text-xs flex items-center gap-1" :class="{'opacity-50 cursor-not-allowed': !anyPendingOrUploading && !anyPaused}">
             <template x-if="anyPendingOrUploading">
@@ -806,8 +806,8 @@
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 6h12v12H6z"/></svg>
             <span>取消全部</span>
           </button>
+          <button @click="clearCompletedUploads()" class="btn-secondary text-xs">清理完成项</button>
         </div>
-        <button @click="clearCompletedUploads()" class="btn-secondary text-xs">清理完成项</button>
       </div>
     </div>
   </div>

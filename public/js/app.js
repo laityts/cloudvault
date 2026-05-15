@@ -1,3 +1,5 @@
+const RESUMABLE_CHUNK_SIZE = 5 * 1024 * 1024;
+
 function cloudvault() {
   return {
     // 原有数据
@@ -80,6 +82,10 @@ function cloudvault() {
 
     get anyNeedsFile() {
       return this.allUploads.some(u => u.status === 'needs_file');
+    },
+
+    get uploadNeedsFolderRestore() {
+      return this.allUploads.some(u => u.status === 'needs_file' && typeof u.relativePath === 'string' && u.relativePath.includes('/'));
     },
 
     get storageLimitBytes() {
@@ -346,7 +352,22 @@ function cloudvault() {
         fileId: item.fileId || null,
         errorMessage: item.errorMessage || '',
         lastModified: Number.isFinite(Number(item.lastModified)) ? Number(item.lastModified) : null,
+        relativePath: typeof item.relativePath === 'string' && item.relativePath ? item.relativePath : item.name,
+        completedChunks: Array.isArray(item.chunks) ? item.chunks.length : 0,
       };
+    },
+
+    getUploadSortWeight(status) {
+      const weights = {
+        uploading: 0,
+        pending: 1,
+        needs_file: 2,
+        paused: 3,
+        error: 4,
+        done: 5,
+        cancelled: 6,
+      };
+      return Object.prototype.hasOwnProperty.call(weights, status) ? weights[status] : 99;
     },
 
     syncUploadsFromManager() {
@@ -356,7 +377,13 @@ function cloudvault() {
         return;
       }
 
-      const items = window.UploadManager.getAllItems().map(item => this.mapUploadItem(item));
+      const items = window.UploadManager.getAllItems()
+        .map(item => this.mapUploadItem(item))
+        .sort((a, b) => {
+          const weightDiff = this.getUploadSortWeight(a.status) - this.getUploadSortWeight(b.status);
+          if (weightDiff !== 0) return weightDiff;
+          return (b.createdAt || 0) - (a.createdAt || 0);
+        });
       this.allUploads = items;
       this.uploads = items.filter(item => item.status === 'pending' || item.status === 'uploading' || item.status === 'paused' || item.status === 'needs_file');
     },
@@ -1416,32 +1443,198 @@ function cloudvault() {
       this.ctxMenu = { show: true, x, y, file };
     },
 
-    handleFileSelect(event) {
-      const files = Array.from(event.target.files || []);
-      if (files.length && window.UploadManager) {
-        window.UploadManager.addFiles(files, this.currentFolder);
+    clickHiddenInput(refName) {
+      const input = this.$refs?.[refName];
+      if (!input) return;
+      input.value = '';
+      input.click();
+    },
+
+    normalizeRelativePath(relativePath, fallbackName = '') {
+      const raw = typeof relativePath === 'string' ? relativePath.trim().replace(/\\/g, '/') : '';
+      const parts = raw.split('/').map(part => part.trim()).filter(Boolean);
+      const safeParts = parts.filter(part => part !== '.' && part !== '..');
+      if (safeParts.length > 0) return safeParts.join('/');
+      return fallbackName || 'untitled';
+    },
+
+    resolveFolderUploadTarget(relativePath) {
+      const normalizedPath = this.normalizeRelativePath(relativePath);
+      const parts = normalizedPath.split('/').filter(Boolean);
+      const folderSuffix = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+      if (!folderSuffix) return this.currentFolder;
+      return this.currentFolder === 'root' ? folderSuffix : this.currentFolder + '/' + folderSuffix;
+    },
+
+    buildDirectUploadEntries(files) {
+      return Array.from(files || [])
+        .filter(file => file instanceof File)
+        .map(file => ({
+          file,
+          folder: this.currentFolder,
+          relativePath: file.name,
+        }));
+    },
+
+    buildFolderUploadEntries(files) {
+      return Array.from(files || [])
+        .filter(file => file instanceof File)
+        .map(file => {
+          const relativePath = this.normalizeRelativePath(file.webkitRelativePath || file.name, file.name);
+          return {
+            file,
+            folder: this.resolveFolderUploadTarget(relativePath),
+            relativePath,
+          };
+        });
+    },
+
+    buildRestoreEntries(files, useRelativePath = false) {
+      return Array.from(files || [])
+        .filter(file => file instanceof File)
+        .map(file => ({
+          file,
+          folder: null,
+          relativePath: this.normalizeRelativePath(useRelativePath ? (file.webkitRelativePath || file.name) : file.name, file.name),
+        }));
+    },
+
+    async queueUploadEntries(entries) {
+      if (!Array.isArray(entries) || entries.length === 0 || !window.UploadManager) return;
+      const summary = await window.UploadManager.addUploadEntries(entries, this.currentFolder);
+      this.syncUploadsFromManager();
+      if (summary?.restored > 0) {
+        this.showToast('已自动恢复 ' + summary.restored + ' 个断点任务', 'success');
       }
+    },
+
+    async restoreUploadEntries(entries) {
+      if (!Array.isArray(entries) || entries.length === 0 || !window.UploadManager) return;
+      const summary = await window.UploadManager.relinkMissingUploads(entries);
+      this.syncUploadsFromManager();
+
+      if (summary.attached > 0) {
+        this.showToast('已恢复 ' + summary.attached + ' 个上传任务', 'success');
+      }
+      if (summary.unmatched > 0) {
+        this.showToast(summary.unmatched + ' 个文件未匹配到待恢复任务', summary.attached > 0 ? 'info' : 'error');
+      }
+      if (summary.failed > 0) {
+        this.showToast(summary.failed + ' 个文件恢复失败', 'error');
+      }
+    },
+
+    async readDirectoryHandle(directoryHandle, basePath) {
+      const entries = [];
+      for await (const handle of directoryHandle.values()) {
+        if (handle.kind === 'file') {
+          const file = await handle.getFile();
+          entries.push({
+            file,
+            relativePath: this.normalizeRelativePath(basePath ? basePath + '/' + handle.name : handle.name, file.name),
+          });
+          continue;
+        }
+
+        if (handle.kind === 'directory') {
+          const nextPath = basePath ? basePath + '/' + handle.name : handle.name;
+          const nestedEntries = await this.readDirectoryHandle(handle, nextPath);
+          entries.push(...nestedEntries);
+        }
+      }
+      return entries;
+    },
+
+    async pickDirectoryEntries() {
+      if (typeof window.showDirectoryPicker !== 'function') {
+        return null;
+      }
+
+      try {
+        const directoryHandle = await window.showDirectoryPicker({ mode: 'read' });
+        return await this.readDirectoryHandle(directoryHandle, directoryHandle.name);
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          return [];
+        }
+        this.showToast('读取文件夹失败，请稍后重试', 'error');
+        return [];
+      }
+    },
+
+    triggerFilePicker() {
+      this.clickHiddenInput('fileUploadInput');
+    },
+
+    async triggerFolderPicker() {
+      if (typeof window.showDirectoryPicker !== 'function') {
+        this.clickHiddenInput('folderUploadInput');
+        return;
+      }
+
+      const directoryEntries = await this.pickDirectoryEntries();
+      if (Array.isArray(directoryEntries)) {
+        if (directoryEntries.length > 0) {
+          await this.queueUploadEntries(directoryEntries.map(entry => ({
+            file: entry.file,
+            folder: this.resolveFolderUploadTarget(entry.relativePath),
+            relativePath: entry.relativePath,
+          })));
+        }
+        if (directoryEntries.length === 0) {
+          return;
+        }
+        return;
+      }
+    },
+
+    triggerRestoreFilePicker() {
+      this.clickHiddenInput('restoreFileInput');
+    },
+
+    async triggerRestoreFolderPicker() {
+      if (typeof window.showDirectoryPicker !== 'function') {
+        this.clickHiddenInput('restoreFolderInput');
+        return;
+      }
+
+      const directoryEntries = await this.pickDirectoryEntries();
+      if (Array.isArray(directoryEntries)) {
+        if (directoryEntries.length > 0) {
+          await this.restoreUploadEntries(directoryEntries.map(entry => ({
+            file: entry.file,
+            folder: null,
+            relativePath: entry.relativePath,
+          })));
+        }
+        if (directoryEntries.length === 0) {
+          return;
+        }
+        return;
+      }
+    },
+
+    async handleFileSelect(event) {
+      const files = Array.from(event?.target?.files || []);
+      await this.queueUploadEntries(this.buildDirectUploadEntries(files));
       event.target.value = '';
     },
 
-    handleFolderSelect(event) {
-      const files = Array.from(event.target.files || []);
-      if (files.length && window.UploadManager) {
-        const grouped = {};
-        for (const file of files) {
-          const relativePath = typeof file.webkitRelativePath === 'string' ? file.webkitRelativePath : '';
-          const parts = relativePath.split('/').filter(Boolean);
-          const folderSuffix = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
-          const targetFolder = folderSuffix
-            ? (this.currentFolder === 'root' ? folderSuffix : this.currentFolder + '/' + folderSuffix)
-            : this.currentFolder;
-          if (!grouped[targetFolder]) grouped[targetFolder] = [];
-          grouped[targetFolder].push(file);
-        }
-        for (const [folder, list] of Object.entries(grouped)) {
-          window.UploadManager.addFiles(list, folder);
-        }
-      }
+    async handleFolderSelect(event) {
+      const files = Array.from(event?.target?.files || []);
+      await this.queueUploadEntries(this.buildFolderUploadEntries(files));
+      event.target.value = '';
+    },
+
+    async handleRestoreFileSelect(event) {
+      const files = Array.from(event?.target?.files || []);
+      await this.restoreUploadEntries(this.buildRestoreEntries(files, false));
+      event.target.value = '';
+    },
+
+    async handleRestoreFolderSelect(event) {
+      const files = Array.from(event?.target?.files || []);
+      await this.restoreUploadEntries(this.buildRestoreEntries(files, true));
       event.target.value = '';
     },
 
@@ -1450,22 +1643,17 @@ function cloudvault() {
       const entries = await window.readDroppedEntries(event.dataTransfer);
       if (entries.length === 0) return;
 
-      const byFolder = {};
-      for (const { file, relativePath } of entries) {
-        let folder = this.currentFolder;
-        if (relativePath) {
-          const segments = relativePath.split('/').filter(Boolean);
-          const relativeFolder = segments.length > 1 ? segments.slice(0, -1).join('/') : '';
-          folder = relativeFolder
-            ? (this.currentFolder === 'root' ? relativeFolder : this.currentFolder + '/' + relativeFolder)
-            : this.currentFolder;
-        }
-        if (!byFolder[folder]) byFolder[folder] = [];
-        byFolder[folder].push(file);
-      }
-      for (const [folder, files] of Object.entries(byFolder)) {
-        window.UploadManager.addFiles(files, folder);
-      }
+      const uploadEntries = entries.map(({ file, relativePath }) => {
+        const normalizedPath = this.normalizeRelativePath(relativePath || file?.name || '', file?.name || 'untitled');
+        const hasFolderContext = normalizedPath.includes('/');
+        return {
+          file,
+          folder: hasFolderContext ? this.resolveFolderUploadTarget(normalizedPath) : this.currentFolder,
+          relativePath: hasFolderContext ? normalizedPath : (file?.name || normalizedPath),
+        };
+      });
+
+      await this.queueUploadEntries(uploadEntries);
     },
 
     toggleDarkMode() {
@@ -1649,6 +1837,46 @@ function cloudvault() {
         needs_file: 'tone-needs-file',
       };
       return tones[status] || 'tone-pending';
+    },
+
+    getUploadTotalChunks(upload) {
+      const size = Number.isFinite(Number(upload?.size)) ? Number(upload.size) : 0;
+      return Math.max(1, Math.ceil(size / RESUMABLE_CHUNK_SIZE));
+    },
+
+    getUploadResumeHint(upload) {
+      if (!upload) return '';
+
+      const totalChunks = this.getUploadTotalChunks(upload);
+      const completedChunks = Math.min(
+        Number.isFinite(Number(upload.completedChunks)) ? Number(upload.completedChunks) : 0,
+        totalChunks
+      );
+
+      if (upload.status === 'needs_file') {
+        return completedChunks > 0
+          ? '重新选择原文件后，会从已完成分片继续上传'
+          : '重新选择原文件后即可恢复上传';
+      }
+
+      if (upload.status === 'error') {
+        return completedChunks > 0
+          ? '已保留 ' + completedChunks + '/' + totalChunks + ' 个分片，可直接重试'
+          : '本次上传失败，可重试重新建立连接';
+      }
+
+      if (totalChunks > 1) {
+        if (upload.status === 'done') {
+          return '分片已全部合并完成';
+        }
+        return '已完成分片 ' + completedChunks + '/' + totalChunks;
+      }
+
+      if (upload.status === 'done') {
+        return '文件已上传完成';
+      }
+
+      return '单文件直传中，完成后会自动入库';
     },
 
     async relinkUploadFile(id) {

@@ -1,7 +1,7 @@
 import { saveUpload, getAllUploads, deleteUpload } from './db.js';
 
 const CHUNK_SIZE = 5 * 1024 * 1024;
-const SMALL_FILE_THRESHOLD = CHUNK_SIZE * 2;
+const SMALL_FILE_THRESHOLD = CHUNK_SIZE;
 const MAX_CONCURRENT_CHUNKS = 3;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
@@ -41,13 +41,74 @@ class UploadManager {
       .sort((a, b) => a.partNumber - b.partNumber);
   }
 
+  normalizeFolder(folder) {
+    return typeof folder === 'string' && folder.trim() ? folder.trim() : 'root';
+  }
+
+  normalizeRelativePath(relativePath, fallbackName = '') {
+    const raw = typeof relativePath === 'string' ? relativePath.trim().replace(/\\/g, '/') : '';
+    const parts = raw.split('/').map(part => part.trim()).filter(Boolean);
+    const safeParts = parts.filter(part => part !== '.' && part !== '..');
+    if (safeParts.length > 0) {
+      return safeParts.join('/');
+    }
+    return fallbackName || 'untitled';
+  }
+
+  normalizeCandidate(entry, defaultFolder = 'root') {
+    const file = entry?.file instanceof File ? entry.file : (entry instanceof File ? entry : null);
+    if (!file) return null;
+
+    return {
+      file,
+      folder: this.normalizeFolder(entry?.folder ?? defaultFolder),
+      relativePath: this.normalizeRelativePath(entry?.relativePath || file.webkitRelativePath || file.name, file.name),
+      lastModified: Number.isFinite(Number(file.lastModified)) ? Number(file.lastModified) : null,
+    };
+  }
+
+  matchesUploadCandidate(item, candidate, options = {}) {
+    if (!item || !candidate?.file) return false;
+
+    const requireFolder = options.requireFolder !== false;
+    const requireRelativePath = options.requireRelativePath === true;
+    const strictLastModified = options.strictLastModified === true;
+
+    if (requireFolder && candidate.folder && item.folder !== candidate.folder) {
+      return false;
+    }
+
+    if (item.name !== candidate.file.name || item.size !== candidate.file.size) {
+      return false;
+    }
+
+    if (requireRelativePath) {
+      const itemRelativePath = this.normalizeRelativePath(item.relativePath, item.name);
+      const candidateRelativePath = this.normalizeRelativePath(candidate.relativePath, candidate.file.name);
+      if (itemRelativePath !== candidateRelativePath) {
+        return false;
+      }
+    }
+
+    if (
+      strictLastModified &&
+      Number.isFinite(Number(item.lastModified)) &&
+      Number.isFinite(Number(candidate.lastModified)) &&
+      Number(item.lastModified) !== Number(candidate.lastModified)
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
   hydrateStoredItem(item) {
     if (!item || typeof item.id !== 'string' || typeof item.name !== 'string') return null;
 
     const size = Number.isFinite(Number(item.size)) ? Number(item.size) : 0;
     const normalized = {
       ...item,
-      folder: typeof item.folder === 'string' && item.folder.trim() ? item.folder : 'root',
+      folder: this.normalizeFolder(item.folder),
       type: typeof item.type === 'string' && item.type ? item.type : 'application/octet-stream',
       size,
       status: this.normalizeStatus(item.status),
@@ -69,6 +130,7 @@ class UploadManager {
       speedSamples: [],
       errorMessage: typeof item.errorMessage === 'string' ? item.errorMessage : '',
       lastModified: Number.isFinite(Number(item.lastModified)) ? Number(item.lastModified) : null,
+      relativePath: this.normalizeRelativePath(item.relativePath, typeof item.name === 'string' ? item.name : 'untitled'),
     };
 
     if (normalized.status === 'uploading') {
@@ -251,13 +313,15 @@ class UploadManager {
     }
   }
 
-  findDuplicateTask(file, folder) {
+  findDuplicateTask(candidate) {
     return this.queue.find(item =>
-      item.name === file.name &&
-      item.size === file.size &&
-      item.folder === folder &&
       item.status !== 'done' &&
-      item.status !== 'cancelled'
+      item.status !== 'cancelled' &&
+      this.matchesUploadCandidate(item, candidate, {
+        requireFolder: true,
+        requireRelativePath: true,
+        strictLastModified: true,
+      })
     );
   }
 
@@ -285,27 +349,52 @@ class UploadManager {
     return { valid: true, message: '' };
   }
 
-  addFiles(files, folder) {
-    const targetFolder = typeof folder === 'string' && folder.trim() ? folder.trim() : 'root';
-    for (const file of Array.from(files || [])) {
-      const validation = this.validateFile(file);
-      if (!validation.valid) {
-        this.dispatch('upload-error', { name: file?.name || '未知文件', error: validation.message });
+  async addUploadEntries(entries, defaultFolder = 'root') {
+    const normalizedEntries = Array.isArray(entries) ? entries : [];
+    const summary = { added: 0, restored: 0, skipped: 0, invalid: 0 };
+
+    for (const entry of normalizedEntries) {
+      const candidate = this.normalizeCandidate(entry, defaultFolder);
+      if (!candidate) {
+        summary.invalid++;
         continue;
       }
 
-      if (this.findDuplicateTask(file, targetFolder)) {
-        this.dispatch('upload-skipped', { name: file.name, reason: '已在上传队列中' });
+      const validation = this.validateFile(candidate.file);
+      if (!validation.valid) {
+        summary.invalid++;
+        this.dispatch('upload-error', { name: candidate.file?.name || '未知文件', error: validation.message });
+        continue;
+      }
+
+      const existing = this.findDuplicateTask(candidate);
+      if (existing) {
+        if (!existing.file || existing.status === 'needs_file') {
+          const attachResult = await this.attachFileToUpload(existing.id, candidate.file, {
+            silentSuccess: true,
+            preferredRelativePath: candidate.relativePath,
+            strictLastModified: true,
+          });
+          if (attachResult?.ok) {
+            summary.restored++;
+          } else {
+            summary.invalid++;
+            this.dispatch('upload-error', { name: candidate.file.name, error: attachResult?.message || '恢复上传任务失败' });
+          }
+        } else {
+          summary.skipped++;
+          this.dispatch('upload-skipped', { name: candidate.file.name, reason: '已在上传队列中' });
+        }
         continue;
       }
 
       const item = {
         id: crypto.randomUUID(),
-        file,
-        folder: targetFolder,
-        name: file.name,
-        size: file.size,
-        type: file.type || 'application/octet-stream',
+        file: candidate.file,
+        folder: candidate.folder,
+        name: candidate.file.name,
+        size: candidate.file.size,
+        type: candidate.file.type || 'application/octet-stream',
         status: 'pending',
         progress: 0,
         uploadedBytes: 0,
@@ -324,14 +413,73 @@ class UploadManager {
         progressUpdateCounter: 0,
         speedSamples: [],
         errorMessage: '',
-        lastModified: Number.isFinite(Number(file.lastModified)) ? Number(file.lastModified) : null,
+        lastModified: candidate.lastModified,
+        relativePath: candidate.relativePath,
       };
       this.queue.push(item);
-      this.saveToStorage(item);
+      await this.saveToStorage(item);
+      summary.added++;
     }
 
-    this.dispatch('upload-queue-changed');
-    this.processQueue();
+    if (summary.added > 0 || summary.restored > 0) {
+      this.dispatch('upload-queue-changed');
+      this.processQueue();
+    }
+
+    return summary;
+  }
+
+  addFiles(files, folder) {
+    const entries = Array.from(files || []).map(file => ({
+      file,
+      folder: this.normalizeFolder(folder),
+      relativePath: file.webkitRelativePath || file.name,
+    }));
+    return this.addUploadEntries(entries, folder);
+  }
+
+  async relinkMissingUploads(entries) {
+    const normalizedEntries = Array.isArray(entries) ? entries : [];
+    const summary = { attached: 0, unmatched: 0, failed: 0 };
+    const matchedTaskIds = new Set();
+
+    for (const entry of normalizedEntries) {
+      const candidate = this.normalizeCandidate(entry, 'root');
+      if (!candidate) {
+        summary.failed++;
+        continue;
+      }
+
+      const task = this.queue.find(item =>
+        item.status === 'needs_file' &&
+        !matchedTaskIds.has(item.id) &&
+        this.matchesUploadCandidate(item, candidate, {
+          requireFolder: false,
+          requireRelativePath: true,
+          strictLastModified: true,
+        })
+      );
+
+      if (!task) {
+        summary.unmatched++;
+        continue;
+      }
+
+      const attachResult = await this.attachFileToUpload(task.id, candidate.file, {
+        silentSuccess: true,
+        preferredRelativePath: candidate.relativePath,
+        strictLastModified: true,
+      });
+
+      if (attachResult?.ok) {
+        matchedTaskIds.add(task.id);
+        summary.attached++;
+      } else {
+        summary.failed++;
+      }
+    }
+
+    return summary;
   }
 
   processQueue() {
@@ -773,10 +921,19 @@ class UploadManager {
     this.processQueue();
   }
 
-  async attachFileToUpload(id, file) {
+  async attachFileToUpload(id, file, options = {}) {
     const item = this.queue.find(entry => entry.id === id);
     if (!item) {
       return { ok: false, message: '上传任务不存在' };
+    }
+
+    const candidate = this.normalizeCandidate({
+      file,
+      folder: item.folder,
+      relativePath: options.preferredRelativePath || item.relativePath || file.webkitRelativePath || file.name,
+    }, item.folder);
+    if (!candidate) {
+      return { ok: false, message: '文件对象无效' };
     }
 
     const validation = this.validateFile(file);
@@ -784,18 +941,25 @@ class UploadManager {
       return { ok: false, message: validation.message };
     }
 
-    if (file.name !== item.name || file.size !== item.size) {
+    if (!this.matchesUploadCandidate(item, candidate, {
+      requireFolder: false,
+      requireRelativePath: options.preferredRelativePath ? true : false,
+      strictLastModified: options.strictLastModified === true,
+    })) {
       return { ok: false, message: '请选择同名且大小一致的原始文件' };
     }
 
     item.file = file;
     item.type = file.type || item.type;
     item.lastModified = Number.isFinite(Number(file.lastModified)) ? Number(file.lastModified) : item.lastModified;
+    item.relativePath = item.relativePath || candidate.relativePath;
 
     if (item.uploadId && item.fileId) {
       await this.syncRemoteMultipartState(item);
       if (item.status === 'done') {
-        this.dispatch('upload-file-attached', { id: item.id, name: item.name, message: '服务器端已完成上传' });
+        if (!options.silentSuccess) {
+          this.dispatch('upload-file-attached', { id: item.id, name: item.name, message: '服务器端已完成上传' });
+        }
         this.dispatch('upload-queue-changed');
         return { ok: true, message: '服务器端已完成上传' };
       }
@@ -809,7 +973,9 @@ class UploadManager {
     item.retryCount = 0;
     item.errorMessage = '';
     await this.saveToStorage(item);
-    this.dispatch('upload-file-attached', { id: item.id, name: item.name, message: '已恢复本地文件，继续上传' });
+    if (!options.silentSuccess) {
+      this.dispatch('upload-file-attached', { id: item.id, name: item.name, message: '已恢复本地文件，继续上传' });
+    }
     this.dispatch('upload-queue-changed');
     this.processQueue();
     return { ok: true, message: '已恢复本地文件，继续上传' };
@@ -939,7 +1105,8 @@ function readEntry(entry, path, files) {
   return new Promise(resolve => {
     if (entry.isFile) {
       entry.file(file => {
-        files.push({ file, relativePath: path });
+        const relativePath = path ? path + '/' + file.name : file.name;
+        files.push({ file, relativePath });
         resolve();
       });
     } else if (entry.isDirectory) {
