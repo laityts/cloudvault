@@ -180,7 +180,7 @@ async function handleApiRoutes(
 ): Promise<Response> {
   // 文件相关
   if (path === '/api/files' && method === 'GET') return files.list(request, env);
-  if (path === '/api/files/upload' && (method === 'POST' || method === 'PUT')) return files.upload(request, env);
+  if (path === '/api/files/upload' && (method === 'GET' || method === 'POST' || method === 'PUT' || method === 'DELETE')) return files.upload(request, env);
   if (path === '/api/files/delete' && method === 'POST') return files.deleteFiles(request, env);
 
   const filesMatch = path.match(/^\/api\/files\/([^/]+)$/);

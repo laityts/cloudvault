@@ -86,7 +86,7 @@
     <!-- 主内容区域 -->
     <main class="workspace flex-1 flex flex-col min-w-0">
       <!-- 操作栏 -->
-      <div class="toolbar workspace-toolbar border-b" :class="{'mobile-toolbar-collapsed': mobileToolbarCollapsed}" style="border-color:var(--border)">
+      <div class="toolbar workspace-toolbar border-b" :class="{'toolbar-collapsed': toolbarCollapsed}" style="border-color:var(--border)">
         <div class="workspace-topline">
           <div class="workspace-home-line breadcrumb flex items-center gap-1 text-sm">
             <a href="#" @click.prevent="navigateFolder('root')" class="flex items-center gap-1">
@@ -117,6 +117,12 @@
                 <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
                 <span class="hidden sm:inline">上传</span>
                 <input type="file" multiple class="hidden" @change="handleFileSelect($event)">
+              </label>
+
+              <label class="btn-secondary text-xs flex items-center gap-1 cursor-pointer">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+                <span class="hidden sm:inline">文件夹</span>
+                <input type="file" multiple webkitdirectory directory class="hidden" @change="handleFolderSelect($event)">
               </label>
 
               <div class="relative category-menu" @click.outside="categoryMenuOpen = false">
@@ -173,6 +179,43 @@
         </div>
       </div>
 
+      <section class="upload-hero">
+        <div class="upload-hero-copy">
+          <span class="upload-hero-badge">上传中心</span>
+          <h2 class="upload-hero-title">拖放即可上传，断点会自动保留</h2>
+          <p class="upload-hero-desc" x-text="uploadHeroHint"></p>
+          <div class="upload-hero-meta">
+            <span>目标目录：<strong x-text="currentFolderLabel"></strong></span>
+            <span x-text="storageUsageLabel"></span>
+          </div>
+          <div class="upload-hero-actions">
+            <label class="btn-primary text-xs flex items-center gap-1 cursor-pointer">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+              <span>选择文件</span>
+              <input type="file" multiple class="hidden" @change="handleFileSelect($event)">
+            </label>
+            <label class="btn-secondary text-xs flex items-center gap-1 cursor-pointer">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+              <span>选择文件夹</span>
+              <input type="file" multiple webkitdirectory directory class="hidden" @change="handleFolderSelect($event)">
+            </label>
+            <button @click="openUploadsModal()" class="btn-secondary text-xs flex items-center gap-1">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+              <span>查看任务</span>
+            </button>
+          </div>
+        </div>
+        <div class="upload-hero-stats">
+          <template x-for="card in uploadSummaryCards" :key="card.key">
+            <article class="upload-stat-card" :class="'tone-' + card.tone">
+              <span class="upload-stat-label" x-text="card.label"></span>
+              <strong class="upload-stat-value" x-text="card.value"></strong>
+              <span class="upload-stat-helper" x-text="card.helper"></span>
+            </article>
+          </template>
+        </div>
+      </section>
+
       <!-- 批量操作栏 -->
       <div x-show="selectedFiles.size > 0" x-transition class="selection-bar flex items-center gap-3 px-4 py-2 text-sm" style="background:var(--accent-soft)">
         <span class="font-medium" style="color:var(--accent)" x-text="selectedFiles.size + ' 已选中'"></span>
@@ -196,7 +239,7 @@
         <div x-show="!loading && currentSubfolders.length === 0 && filteredFiles.length === 0" class="empty-state">
           <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color:var(--text-muted)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/></svg>
           <p class="text-lg font-medium mb-1">暂无文件</p>
-          <p class="text-sm">拖放文件至此处或点击上传开始</p>
+          <p class="text-sm">拖放文件或文件夹至此处，或使用上方上传中心开始</p>
         </div>
 
         <!-- 网格视图 -->
@@ -344,7 +387,7 @@
   <div class="dropzone" :class="{'active': showDropZone}" @drop.prevent="handleDrop($event)" @dragover.prevent @dragleave.prevent="showDropZone = false">
     <div class="text-center">
       <svg class="w-16 h-16 mx-auto mb-4 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
-      <p class="text-xl font-semibold text-accent-400">拖放文件以上传</p>
+      <p class="text-xl font-semibold text-accent-400">拖放文件或文件夹以上传</p>
       <p class="text-sm mt-1" style="color:var(--text-muted)" x-text="'到 ' + (currentFolder === 'root' ? '首页' : currentFolder)"></p>
     </div>
   </div>
@@ -678,100 +721,93 @@
 
   <!-- 上传任务模态框 -->
   <div x-show="showUploadsModal" x-transition class="modal-backdrop" @click.self="showUploadsModal = false">
-    <div class="modal-content" style="max-width: 800px; width: 90%;">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold">上传任务</h3>
-        <button @click="showUploadsModal = false" class="p-1.5 rounded-lg hover:bg-gray-700">
+    <div class="modal-content upload-modal-panel" style="max-width: 920px; width: min(94vw, 920px);">
+      <div class="upload-modal-header">
+        <div>
+          <p class="upload-modal-kicker">上传任务</p>
+          <h3 class="text-xl font-semibold">上传队列</h3>
+          <p class="upload-modal-subtitle">支持暂停、恢复、补文件和断点续传。</p>
+        </div>
+        <button @click="showUploadsModal = false" class="icon-action" aria-label="关闭上传任务">
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
         </button>
       </div>
 
-      <div class="max-h-96 overflow-y-auto">
-        <template x-if="allUploads.length === 0">
-          <p class="text-sm text-center py-8" style="color:var(--text-muted)">暂无上传任务</p>
-        </template>
-        <template x-for="upload in allUploads" :key="upload.id">
-          <div class="flex items-center gap-3 p-3 border-b last:border-b-0" style="border-color:var(--border)">
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center justify-between">
-                <p class="text-sm font-medium truncate" x-text="upload.name"></p>
-                <span class="text-xs ml-2 flex-shrink-0" :class="{
-                  'text-green-400': upload.status === 'done',
-                  'text-red-400': upload.status === 'error',
-                  'text-yellow-400': upload.status === 'paused',
-                  'text-blue-400': upload.status === 'uploading',
-                  'text-gray-400': upload.status === 'pending'
-                }" x-text="{
-                  'done': '已完成',
-                  'error': '失败',
-                  'paused': '已暂停',
-                  'uploading': '上传中',
-                  'pending': '等待中',
-                  'cancelled': '已取消'
-                }[upload.status] || upload.status"></span>
-              </div>
-              <p class="text-xs" style="color:var(--text-muted)" x-text="'位置：' + (upload.folder === 'root' ? '/' : upload.folder) + ' · ' + formatBytes(upload.size)"></p>
-              <div class="progress-bar mt-1">
-                <div class="fill" :style="'width:' + upload.progress + '%'"></div>
-              </div>
-              <div class="flex justify-between text-xs mt-1" style="color:var(--text-muted)">
-                <span x-text="formatBytes(upload.speed) + '/s'"></span>
-                <span x-show="upload.eta && upload.eta !== Infinity" x-text="formatTime(upload.eta) + ' 剩余'"></span>
-                <span x-show="upload.status === 'error' && upload.retryCount > 0" x-text="'重试 ' + upload.retryCount + '/3'"></span>
-              </div>
-            </div>
-            <div class="flex items-center gap-1 ml-2">
-              <template x-if="upload.status === 'pending' || upload.status === 'uploading'">
-                <button @click="pauseUpload(upload.id)" class="p-1.5 rounded hover:bg-gray-700" title="暂停">
-                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </button>
-              </template>
-              <template x-if="upload.status === 'paused'">
-                <button @click="resumeUpload(upload.id)" class="p-1.5 rounded hover:bg-gray-700" title="恢复">
-                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </button>
-              </template>
-              <button @click="cancelUpload(upload.id)" class="p-1.5 rounded hover:bg-red-900/20 text-red-400" title="取消">
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-              </button>
-              <template x-if="upload.status === 'error'">
-                <button @click="retryUpload(upload.id)" class="p-1.5 rounded hover:bg-gray-700" title="重试">
-                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                </button>
-              </template>
-            </div>
-          </div>
+      <div class="upload-modal-summary">
+        <template x-for="card in uploadSummaryCards" :key="card.key">
+          <article class="upload-summary-chip" :class="'tone-' + card.tone">
+            <span x-text="card.label"></span>
+            <strong x-text="card.value"></strong>
+          </article>
         </template>
       </div>
 
-      <div class="flex justify-between items-center mt-4">
-        <div class="flex gap-2">
+      <div class="upload-modal-list">
+        <template x-if="allUploads.length === 0">
+          <div class="upload-empty-state">
+            <p class="text-base font-medium">暂无上传任务</p>
+            <p class="text-sm" style="color:var(--text-muted)">选择文件或文件夹后，这里会显示每个任务的进度。</p>
+          </div>
+        </template>
+        <template x-for="upload in allUploads" :key="upload.id">
+          <article class="upload-task-card" :class="getUploadStatusTone(upload.status)">
+            <div class="upload-task-main">
+              <div class="upload-task-head">
+                <p class="upload-task-name" x-text="upload.name"></p>
+                <span class="upload-status-pill" :class="getUploadStatusTone(upload.status)" x-text="getUploadStatusLabel(upload.status)"></span>
+              </div>
+              <p class="upload-task-meta" x-text="'位置：' + (upload.folder === 'root' ? '/' : upload.folder) + ' · ' + formatBytes(upload.size) + ' · 已传 ' + formatBytes(upload.uploadedBytes || 0)"></p>
+              <div class="progress-bar upload-task-progress">
+                <div class="fill" :style="'width:' + upload.progress + '%'"></div>
+              </div>
+              <div class="upload-task-footer">
+                <span x-text="formatBytes(upload.speed) + '/s'"></span>
+                <span x-show="upload.eta && upload.eta !== Infinity" x-text="formatTime(upload.eta) + ' 剩余'"></span>
+                <span x-show="upload.status === 'error' && upload.retryCount > 0" x-text="'重试 ' + upload.retryCount + '/3'"></span>
+                <span x-show="upload.status === 'error' && upload.errorMessage" x-text="upload.errorMessage"></span>
+              </div>
+            </div>
+            <div class="upload-task-actions">
+              <template x-if="upload.status === 'needs_file'">
+                <button @click="relinkUploadFile(upload.id)" class="btn-primary text-xs">补文件</button>
+              </template>
+              <template x-if="upload.status === 'pending' || upload.status === 'uploading'">
+                <button @click="pauseUpload(upload.id)" class="btn-secondary text-xs">暂停</button>
+              </template>
+              <template x-if="upload.status === 'paused'">
+                <button @click="resumeUpload(upload.id)" class="btn-secondary text-xs">继续</button>
+              </template>
+              <template x-if="upload.status === 'error'">
+                <button @click="retryUpload(upload.id)" class="btn-secondary text-xs">重试</button>
+              </template>
+              <button @click="cancelUpload(upload.id)" class="btn-danger text-xs">取消</button>
+            </div>
+          </article>
+        </template>
+      </div>
+
+      <div class="upload-modal-footer">
+        <div class="flex gap-2 flex-wrap">
           <button @click="anyPendingOrUploading ? pauseAllUploads() : (anyPaused ? resumeAllUploads() : null)" :disabled="!anyPendingOrUploading && !anyPaused" class="btn-secondary text-xs flex items-center gap-1" :class="{'opacity-50 cursor-not-allowed': !anyPendingOrUploading && !anyPaused}">
             <template x-if="anyPendingOrUploading">
               <span class="flex items-center gap-1">
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                <span>暂停</span>
+                <span>暂停全部</span>
               </span>
             </template>
             <template x-if="!anyPendingOrUploading && anyPaused">
               <span class="flex items-center gap-1">
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                <span>恢复</span>
-              </span>
-            </template>
-            <template x-if="!anyPendingOrUploading && !anyPaused">
-              <span class="flex items-center gap-1 opacity-50">
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                <span>暂停</span>
+                <span>恢复全部</span>
               </span>
             </template>
           </button>
           <button @click="cancelAllUploads()" class="btn-secondary text-xs flex items-center gap-1 text-red-400">
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 6h12v12H6z"/></svg>
-            <span>取消</span>
+            <span>取消全部</span>
           </button>
         </div>
-        <button @click="clearCompletedUploads()" class="btn-secondary text-xs">清除已完成</button>
+        <button @click="clearCompletedUploads()" class="btn-secondary text-xs">清理完成项</button>
       </div>
     </div>
   </div>

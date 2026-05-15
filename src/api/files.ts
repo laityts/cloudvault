@@ -4,6 +4,72 @@ import { getSharedFolders, getExcludedFolders, isFolderShared } from './share';
 
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
 
+type MultipartPart = {
+  partNumber: number;
+  etag: string;
+};
+
+function safeDecodeHeaderValue(value: string | null, fallback: string): string {
+  if (typeof value !== 'string' || value.length === 0) return fallback;
+  try {
+    return decodeURIComponent(value).trim();
+  } catch {
+    return value.trim();
+  }
+}
+
+function normalizeFolderPath(folder: string): string | null {
+  const raw = (folder || 'root').trim();
+  if (!raw || raw === 'root') return 'root';
+  if (raw.startsWith('/') || raw.endsWith('/') || raw.includes('\\') || raw.includes('//')) return null;
+  const parts = raw.split('/').map(part => part.trim());
+  if (parts.some(part => !part || part === '.' || part === '..')) return null;
+  return parts.join('/');
+}
+
+function normalizeFileName(fileName: string): string | null {
+  const raw = (fileName || '').trim();
+  if (!raw || raw === '.' || raw === '..') return null;
+  if (raw.includes('/') || raw.includes('\\')) return null;
+  return raw;
+}
+
+function parseUploadRequestMeta(request: Request): { fileName: string; folder: string; contentType: string; key: string } | null {
+  const fileName = normalizeFileName(safeDecodeHeaderValue(request.headers.get('X-File-Name'), 'untitled'));
+  const folder = normalizeFolderPath(safeDecodeHeaderValue(request.headers.get('X-Folder'), 'root'));
+  if (!fileName || !folder) return null;
+  const contentType = request.headers.get('Content-Type') || getMimeType(fileName);
+  const key = folder === 'root' ? fileName : folder + '/' + fileName;
+  return { fileName, folder, contentType, key };
+}
+
+function normalizeMultipartParts(parts: unknown): MultipartPart[] {
+  if (!Array.isArray(parts)) return [];
+  const partMap = new Map<number, string>();
+
+  for (const part of parts) {
+    const partNumber = Number((part as { partNumber?: unknown })?.partNumber);
+    const etag = typeof (part as { etag?: unknown })?.etag === 'string'
+      ? (part as { etag: string }).etag.trim()
+      : '';
+    if (!Number.isInteger(partNumber) || partNumber <= 0 || !etag) continue;
+    partMap.set(partNumber, etag);
+  }
+
+  return Array.from(partMap.entries())
+    .map(([partNumber, etag]) => ({ partNumber, etag }))
+    .sort((a, b) => a.partNumber - b.partNumber);
+}
+
+function parseStoredMultipartParts(raw: string | null): MultipartPart[] {
+  if (!raw) return [];
+  try {
+    return normalizeMultipartParts(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
 function extractId(url: URL): string | null {
   const parts = url.pathname.split('/');
   const idx = parts.indexOf('files');
@@ -97,6 +163,9 @@ export async function upload(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const action = url.searchParams.get('action');
 
+  if (action === 'mpu-status') {
+    return handleMultipartStatus(env, url);
+  }
   if (action === 'mpu-create') {
     return handleMultipartCreate(request, env);
   }
@@ -117,13 +186,12 @@ export async function upload(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleDirectUpload(request: Request, env: Env): Promise<Response> {
-  const fileName = decodeURIComponent(request.headers.get('X-File-Name') || 'untitled');
-  const folder = decodeURIComponent(request.headers.get('X-Folder') || 'root');
-  const contentType = request.headers.get('Content-Type') || getMimeType(fileName);
-  const id = crypto.randomUUID();
-  const key = folder === 'root' ? fileName : folder + '/' + fileName;
+  const uploadMeta = parseUploadRequestMeta(request);
+  if (!uploadMeta) return error('Invalid upload target', 400);
+  if (!request.body) return error('Upload body required', 400);
 
-  if (!key || key.includes('..')) return error('Invalid file path', 400);
+  const { fileName, folder, contentType, key } = uploadMeta;
+  const id = crypto.randomUUID();
 
   const r2Object = await env.VAULT_BUCKET.put(key, request.body, {
     httpMetadata: { contentType, contentDisposition: 'attachment; filename="' + fileName + '"' },
@@ -183,11 +251,12 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
 }
 
 async function handleMultipartCreate(request: Request, env: Env): Promise<Response> {
-  const fileName = decodeURIComponent(request.headers.get('X-File-Name') || 'untitled');
-  const folder = decodeURIComponent(request.headers.get('X-Folder') || 'root');
-  const contentType = request.headers.get('Content-Type') || getMimeType(fileName);
+  const uploadMeta = parseUploadRequestMeta(request);
+  if (!uploadMeta) return error('Invalid upload target', 400);
+
+  const { fileName, folder, contentType, key } = uploadMeta;
   const fileSize = parseInt(request.headers.get('X-File-Size') || '0', 10);
-  const key = folder === 'root' ? fileName : folder + '/' + fileName;
+  if (!Number.isFinite(fileSize) || fileSize < 0) return error('Invalid file size', 400);
 
   const multipart = await env.VAULT_BUCKET.createMultipartUpload(key, {
     httpMetadata: { contentType, contentDisposition: 'attachment; filename="' + fileName + '"' },
@@ -216,11 +285,77 @@ async function handleMultipartCreate(request: Request, env: Env): Promise<Respon
   return json({ uploadId: multipart.uploadId, key, fileId: id });
 }
 
+async function handleMultipartStatus(env: Env, url: URL): Promise<Response> {
+  const fileId = url.searchParams.get('fileId');
+  const uploadId = url.searchParams.get('uploadId');
+  if (!fileId) return error('Missing fileId', 400);
+
+  const row = await env.DB.prepare(
+    `SELECT id, key, name, size, type, folder,
+            upload_id as uploadId, upload_chunks as uploadChunks,
+            upload_status as uploadStatus, upload_total_chunks as uploadTotalChunks,
+            upload_completed_chunks as uploadCompletedChunks, upload_updated_at as uploadUpdatedAt
+     FROM files
+     WHERE id = ?`
+  ).bind(fileId).first<{
+    id: string;
+    key: string;
+    name: string;
+    size: number;
+    type: string;
+    folder: string;
+    uploadId: string | null;
+    uploadChunks: string | null;
+    uploadStatus: string | null;
+    uploadTotalChunks: number | null;
+    uploadCompletedChunks: number | null;
+    uploadUpdatedAt: string | null;
+  }>();
+
+  if (!row) return error('Upload session not found', 404);
+  if (uploadId && row.uploadId && row.uploadId !== uploadId && row.uploadStatus !== 'done') {
+    return error('Upload session mismatch', 409);
+  }
+
+  const chunks = parseStoredMultipartParts(row.uploadChunks);
+  const completedChunks = Number.isFinite(Number(row.uploadCompletedChunks))
+    ? Math.max(Number(row.uploadCompletedChunks), chunks.length)
+    : chunks.length;
+
+  return json({
+    fileId: row.id,
+    uploadId: row.uploadId,
+    key: row.key,
+    name: row.name,
+    size: Number(row.size) || 0,
+    type: row.type,
+    folder: row.folder,
+    status: row.uploadStatus || 'done',
+    totalChunks: Number.isFinite(Number(row.uploadTotalChunks)) ? Number(row.uploadTotalChunks) : chunks.length,
+    completedChunks,
+    chunks,
+    updatedAt: row.uploadUpdatedAt,
+    completed: !row.uploadId || row.uploadStatus === 'done',
+  });
+}
+
 async function handleMultipartUpload(request: Request, env: Env, url: URL): Promise<Response> {
   const uploadId = url.searchParams.get('uploadId');
   const partNumber = parseInt(url.searchParams.get('partNumber') || '0', 10);
   const key = url.searchParams.get('key');
   if (!uploadId || !partNumber || !key) return error('Missing uploadId, partNumber, or key', 400);
+  if (!request.body) return error('Missing upload chunk body', 400);
+  if (key.includes('\\') || key.includes('..')) return error('Invalid file path', 400);
+
+  const row = await env.DB.prepare(
+    `SELECT upload_total_chunks as uploadTotalChunks, upload_status as uploadStatus
+     FROM files
+     WHERE key = ? AND upload_id = ?`
+  ).bind(key, uploadId).first<{ uploadTotalChunks: number | null; uploadStatus: string | null }>();
+  if (!row || row.uploadStatus === 'done') return error('Upload session not found', 404);
+  if (Number.isFinite(Number(row.uploadTotalChunks)) && partNumber > Number(row.uploadTotalChunks)) {
+    return error('Invalid part number', 400);
+  }
 
   const multipart = env.VAULT_BUCKET.resumeMultipartUpload(key, uploadId);
   const part = await multipart.uploadPart(partNumber, request.body as ReadableStream);
@@ -228,15 +363,52 @@ async function handleMultipartUpload(request: Request, env: Env, url: URL): Prom
 }
 
 async function handleMultipartComplete(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{
-    uploadId: string; key: string; parts: { partNumber: number; etag: string }[]; fileId: string;
+  let body: {
+    uploadId?: string;
+    key?: string;
+    parts?: { partNumber: number; etag: string }[];
+    fileId?: string;
+  };
+  try {
+    body = await request.json<{
+      uploadId?: string;
+      key?: string;
+      parts?: { partNumber: number; etag: string }[];
+      fileId?: string;
+    }>();
+  } catch {
+    return error('Invalid multipart completion payload', 400);
+  }
+  if (!body?.uploadId || !body?.key || !body?.fileId) return error('Missing multipart completion data', 400);
+
+  const normalizedParts = normalizeMultipartParts(body.parts);
+  if (normalizedParts.length === 0) return error('No uploaded parts provided', 400);
+
+  const row = await env.DB.prepare(
+    `SELECT id, key, upload_id as uploadId, upload_status as uploadStatus, upload_total_chunks as uploadTotalChunks
+     FROM files
+     WHERE id = ?`
+  ).bind(body.fileId).first<{
+    id: string;
+    key: string;
+    uploadId: string | null;
+    uploadStatus: string | null;
+    uploadTotalChunks: number | null;
   }>();
+  if (!row) return error('File not found', 404);
+  if (row.uploadStatus === 'done') {
+    const meta = await getFileById(env, body.fileId);
+    if (!meta) return error('File not found', 404);
+    return json(meta, 200);
+  }
+  if (row.key !== body.key || row.uploadId !== body.uploadId) return error('Upload session mismatch', 409);
+  if (Number.isFinite(Number(row.uploadTotalChunks)) && normalizedParts.length !== Number(row.uploadTotalChunks)) {
+    return error('Multipart upload is incomplete', 400);
+  }
 
   const multipart = env.VAULT_BUCKET.resumeMultipartUpload(body.key, body.uploadId);
-  const r2Object = await multipart.complete(body.parts);
+  const r2Object = await multipart.complete(normalizedParts);
 
-  const fileName = body.key.split('/').pop() || body.key;
-  const folder = body.key.includes('/') ? body.key.substring(0, body.key.lastIndexOf('/')) : 'root';
   const now = new Date().toISOString();
 
   // 计算哈希
@@ -246,7 +418,8 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
   await env.DB.prepare(
     `UPDATE files SET 
       size = ?, uploaded_at = ?, upload_id = NULL, upload_chunks = NULL,
-      upload_status = 'done', upload_updated_at = ?, sha1 = ?, sha256 = ?
+      upload_status = 'done', upload_updated_at = ?, upload_completed_chunks = upload_total_chunks,
+      upload_retry_count = 0, upload_error = NULL, sha1 = ?, sha256 = ?
      WHERE id = ?`
   ).bind(r2Object.size, now, now, hashes?.sha1, hashes?.sha256, body.fileId).run();
 
@@ -263,23 +436,60 @@ async function handleMultipartAbort(request: Request, env: Env): Promise<Respons
   const key = url.searchParams.get('key');
   const fileId = url.searchParams.get('fileId');
   if (!uploadId || !key) return error('Missing uploadId or key', 400);
+  if (key.includes('\\') || key.includes('..')) return error('Invalid file path', 400);
   try {
     const multipart = env.VAULT_BUCKET.resumeMultipartUpload(key, uploadId);
     await multipart.abort();
-  } catch (e) {}
-  if (fileId) await env.DB.prepare(`DELETE FROM files WHERE id = ?`).bind(fileId).run();
+  } catch {}
+  if (fileId) {
+    await env.DB.prepare(
+      `DELETE FROM files WHERE id = ? AND upload_id = ? AND upload_status != 'done'`
+    ).bind(fileId, uploadId).run();
+  } else {
+    await env.DB.prepare(
+      `DELETE FROM files WHERE key = ? AND upload_id = ? AND upload_status != 'done'`
+    ).bind(key, uploadId).run();
+  }
   return json({ message: 'Upload aborted' });
 }
 
 async function handleMultipartProgress(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{
-    fileId: string; uploadId: string; completedChunks: number; chunks: { partNumber: number; etag: string }[];
-  }>();
+  let body: {
+    fileId?: string;
+    uploadId?: string;
+    completedChunks?: number;
+    chunks?: { partNumber: number; etag: string }[];
+  };
+  try {
+    body = await request.json<{
+      fileId?: string;
+      uploadId?: string;
+      completedChunks?: number;
+      chunks?: { partNumber: number; etag: string }[];
+    }>();
+  } catch {
+    return error('Invalid upload progress payload', 400);
+  }
+  if (!body?.fileId || !body?.uploadId) return error('Missing upload progress data', 400);
+
+  const chunks = normalizeMultipartParts(body.chunks);
+  const row = await env.DB.prepare(
+    `SELECT upload_total_chunks as uploadTotalChunks FROM files WHERE id = ? AND upload_id = ?`
+  ).bind(body.fileId, body.uploadId).first<{ uploadTotalChunks: number | null }>();
+  if (!row) return error('Upload session not found', 404);
+
+  const totalChunks = Number.isFinite(Number(row.uploadTotalChunks)) ? Number(row.uploadTotalChunks) : null;
+  if (totalChunks !== null && chunks.length > totalChunks) return error('Upload progress is out of range', 400);
+
+  const completedChunks = Number.isFinite(Number(body.completedChunks))
+    ? Math.max(Math.min(Number(body.completedChunks), totalChunks ?? Number(body.completedChunks)), chunks.length)
+    : chunks.length;
+
   await env.DB.prepare(
-    `UPDATE files SET upload_completed_chunks = ?, upload_chunks = ?, upload_updated_at = ?
+    `UPDATE files SET upload_completed_chunks = ?, upload_chunks = ?, upload_updated_at = ?, upload_error = NULL
      WHERE id = ? AND upload_id = ?`
-  ).bind(body.completedChunks, JSON.stringify(body.chunks), new Date().toISOString(), body.fileId, body.uploadId).run();
-  return json({ success: true });
+  ).bind(completedChunks, JSON.stringify(chunks), new Date().toISOString(), body.fileId, body.uploadId).run();
+  return json({ success: true, completedChunks });
 }
 
 export async function list(request: Request, env: Env): Promise<Response> {
@@ -459,7 +669,10 @@ export async function deleteFolder(request: Request, env: Env): Promise<Response
     }
   }
   const filesToDelete = await env.DB.prepare(
-    `SELECT id, key, size FROM files WHERE folder = ? OR folder LIKE ? AND (upload_status = 'done' OR upload_status IS NULL)`
+    `SELECT id, key, size
+     FROM files
+     WHERE (folder = ? OR folder LIKE ?)
+       AND (upload_status = 'done' OR upload_status IS NULL)`
   ).bind(folder, folder + '/%').all();
   let totalSizeRemoved = 0, deletedCount = 0;
   for (const row of filesToDelete.results) {
@@ -468,7 +681,11 @@ export async function deleteFolder(request: Request, env: Env): Promise<Response
     totalSizeRemoved += row.size as number;
     deletedCount++;
   }
-  await env.DB.prepare(`DELETE FROM files WHERE folder = ? OR folder LIKE ? AND upload_status != 'done'`).bind(folder, folder + '/%').run();
+  await env.DB.prepare(
+    `DELETE FROM files
+     WHERE (folder = ? OR folder LIKE ?)
+       AND upload_status != 'done'`
+  ).bind(folder, folder + '/%').run();
   if (deletedCount > 0) await updateStatsCounters(env, -totalSizeRemoved, -deletedCount);
   return json({ deleted: folder, deletedFiles: deletedCount, deletedSubfolders: subFolders.results.length });
 }
@@ -548,7 +765,12 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
 export async function listFolders(_request: Request, env: Env): Promise<Response> {
   const folderRows = await env.DB.prepare(`SELECT path FROM folders`).all();
   const folderSet = new Set<string>(folderRows.results.map(r => r.path as string));
-  const fileFolders = await env.DB.prepare(`SELECT DISTINCT folder FROM files WHERE folder != 'root'`).all();
+  const fileFolders = await env.DB.prepare(
+    `SELECT DISTINCT folder
+     FROM files
+     WHERE folder != 'root'
+       AND (upload_status = 'done' OR upload_status IS NULL)`
+  ).all();
   for (const row of fileFolders.results) {
     const folder = row.folder as string;
     folderSet.add(folder);

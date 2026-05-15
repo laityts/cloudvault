@@ -1,284 +1,504 @@
-// upload.js - 增强版上传管理器
 import { saveUpload, getAllUploads, deleteUpload } from './db.js';
 
-const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
-const MAX_CONCURRENT_CHUNKS = 3;      // 分块并发数
-const MAX_RETRIES = 3;                 // 最大重试次数
-const RETRY_DELAY = 1000;              // 重试延迟（ms）
-const PROGRESS_UPDATE_INTERVAL = 5;    // 每上传5个分块更新一次服务器进度
+const CHUNK_SIZE = 5 * 1024 * 1024;
+const SMALL_FILE_THRESHOLD = CHUNK_SIZE * 2;
+const MAX_CONCURRENT_CHUNKS = 3;
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000;
+const PROGRESS_UPDATE_INTERVAL = 5;
 
 class UploadManager {
   constructor() {
-    this.queue = [];           // 上传队列（内存中的实时状态，包含所有任务）
-    this.active = 0;           // 当前活跃的上传任务数
-    this.maxConcurrent = 3;    // 最大并发任务数（不同文件）
-    this.speedSamples = [];    // 用于计算速度的样本
-    this.loadFromStorage();    // 从 IndexedDB 恢复队列
+    this.queue = [];
+    this.active = 0;
+    this.maxConcurrent = 3;
+    this.loadFromStorage();
     this.setupEventListeners();
   }
 
-  // 从存储恢复队列（保留所有任务，包括已完成）
+  dispatch(name, detail) {
+    window.dispatchEvent(new CustomEvent(name, { detail }));
+  }
+
+  normalizeStatus(status) {
+    const allowed = new Set(['pending', 'uploading', 'paused', 'done', 'error', 'cancelled', 'needs_file']);
+    return allowed.has(status) ? status : 'pending';
+  }
+
+  normalizeParts(parts) {
+    if (!Array.isArray(parts)) return [];
+    const partMap = new Map();
+
+    for (const part of parts) {
+      const partNumber = Number(part?.partNumber);
+      const etag = typeof part?.etag === 'string' ? part.etag.trim() : '';
+      if (!Number.isInteger(partNumber) || partNumber <= 0 || !etag) continue;
+      partMap.set(partNumber, etag);
+    }
+
+    return Array.from(partMap.entries())
+      .map(([partNumber, etag]) => ({ partNumber, etag }))
+      .sort((a, b) => a.partNumber - b.partNumber);
+  }
+
+  hydrateStoredItem(item) {
+    if (!item || typeof item.id !== 'string' || typeof item.name !== 'string') return null;
+
+    const size = Number.isFinite(Number(item.size)) ? Number(item.size) : 0;
+    const normalized = {
+      ...item,
+      folder: typeof item.folder === 'string' && item.folder.trim() ? item.folder : 'root',
+      type: typeof item.type === 'string' && item.type ? item.type : 'application/octet-stream',
+      size,
+      status: this.normalizeStatus(item.status),
+      progress: Number.isFinite(Number(item.progress)) ? Math.max(0, Math.min(100, Number(item.progress))) : 0,
+      uploadedBytes: Number.isFinite(Number(item.uploadedBytes)) ? Math.max(0, Math.min(size, Number(item.uploadedBytes))) : 0,
+      speed: 0,
+      eta: 0,
+      retryCount: Number.isFinite(Number(item.retryCount)) ? Math.max(0, Number(item.retryCount)) : 0,
+      chunks: this.normalizeParts(item.chunks),
+      uploadId: typeof item.uploadId === 'string' && item.uploadId ? item.uploadId : null,
+      key: typeof item.key === 'string' && item.key ? item.key : null,
+      fileId: typeof item.fileId === 'string' && item.fileId ? item.fileId : null,
+      controller: null,
+      xhr: null,
+      createdAt: Number.isFinite(Number(item.createdAt)) ? Number(item.createdAt) : Date.now(),
+      lastUpdate: null,
+      lastLoaded: Number.isFinite(Number(item.lastLoaded)) ? Number(item.lastLoaded) : 0,
+      progressUpdateCounter: 0,
+      speedSamples: [],
+      errorMessage: typeof item.errorMessage === 'string' ? item.errorMessage : '',
+      lastModified: Number.isFinite(Number(item.lastModified)) ? Number(item.lastModified) : null,
+    };
+
+    if (normalized.status === 'uploading') {
+      normalized.status = normalized.file ? 'paused' : 'needs_file';
+    }
+
+    if (normalized.status === 'done') {
+      normalized.progress = 100;
+      normalized.uploadedBytes = normalized.size;
+      normalized.retryCount = 0;
+      normalized.errorMessage = '';
+    } else if (!normalized.file && normalized.status !== 'cancelled') {
+      normalized.status = 'needs_file';
+    }
+
+    return normalized;
+  }
+
+  serializeUpload(item, includeFile = true) {
+    const copy = { ...item };
+    delete copy.controller;
+    delete copy.xhr;
+    delete copy.lastUpdate;
+    delete copy.lastLoaded;
+    delete copy.progressUpdateCounter;
+    delete copy.speedSamples;
+    delete copy._saveTimeout;
+    if (!includeFile) delete copy.file;
+    return copy;
+  }
+
   async loadFromStorage() {
     try {
       let stored = await getAllUploads();
-      
-      // 如果 IndexedDB 为空，尝试从 localStorage 恢复备份
+
       if (stored.length === 0) {
         const backup = localStorage.getItem('cv_upload_backup');
         if (backup) {
           try {
             const parsed = JSON.parse(backup);
-            // 重新存入 IndexedDB
-            for (const item of parsed) {
-              await saveUpload(item);
+            if (Array.isArray(parsed)) {
+              for (const item of parsed) {
+                await saveUpload(item);
+              }
+              stored = parsed;
             }
-            stored = parsed; // 使用恢复的数据
-            localStorage.removeItem('cv_upload_backup'); // 清理备份
-          } catch (e) {
-            console.error('Failed to restore from localStorage backup', e);
+            localStorage.removeItem('cv_upload_backup');
+          } catch (error) {
+            console.error('Failed to restore from localStorage backup', error);
           }
         }
       }
 
-      this.queue = stored.map(item => ({
-        ...item,
-        // 确保每个任务有必要的控制属性
-        controller: null,
-        xhr: null,
-        speed: 0,
-        eta: 0,
-        lastUpdate: null,
-        lastLoaded: 0,
-        progressUpdateCounter: 0,
-      }));
-      // 修复可能残留的 uploading 状态（例如上次未正常关闭）
-      this.reconcileUploadingState();
-      window.dispatchEvent(new CustomEvent('upload-queue-loaded'));
-      this.processQueue();
-    } catch (e) {
-      console.error('Failed to load uploads from storage', e);
-    }
-  }
+      this.queue = stored
+        .map(item => this.hydrateStoredItem(item))
+        .filter(item => item !== null);
 
-  // 修复页面加载后可能残留的 uploading 状态（例如上次未正常关闭）
-  reconcileUploadingState() {
-    let changed = false;
-    for (const item of this.queue) {
-      // 如果状态是 uploading 但没有活跃的 controller，说明实际已中断，改为 paused
-      if (item.status === 'uploading' && !item.controller) {
-        item.status = 'paused';
-        this.saveToStorage(item); // 异步保存
-        changed = true;
+      for (const item of this.queue) {
+        await this.restoreUploadState(item);
       }
-    }
-    if (changed) {
-      window.dispatchEvent(new CustomEvent('upload-queue-changed'));
+
+      this.dispatch('upload-queue-loaded');
+      this.dispatch('upload-queue-changed');
+      this.processQueue();
+    } catch (error) {
+      console.error('Failed to load uploads from storage', error);
     }
   }
 
-  // 页面卸载时调用：暂停所有正在上传的任务，并保存状态
+  async restoreUploadState(item) {
+    if (!item || item.status === 'done' || item.status === 'cancelled') {
+      return;
+    }
+
+    if (item.uploadId && item.fileId) {
+      await this.syncRemoteMultipartState(item);
+    }
+
+    if (!item.file && item.status !== 'done') {
+      item.status = 'needs_file';
+      await this.saveToStorage(item);
+    }
+  }
+
+  async syncRemoteMultipartState(item) {
+    if (!item?.uploadId || !item?.fileId) return;
+
+    try {
+      const url = `/api/files/upload?action=mpu-status&fileId=${encodeURIComponent(item.fileId)}&uploadId=${encodeURIComponent(item.uploadId)}`;
+      const response = await fetch(url, {
+        method: 'GET',
+        credentials: 'same-origin',
+      });
+
+      if (response.status === 404) {
+        item.uploadId = null;
+        item.key = null;
+        item.fileId = null;
+        item.chunks = [];
+        item.uploadedBytes = 0;
+        item.progress = 0;
+        item.status = item.file ? 'pending' : 'needs_file';
+        await this.saveToStorage(item);
+        return;
+      }
+
+      if (!response.ok) {
+        return;
+      }
+
+      const data = await response.json();
+      if (data.completed || data.status === 'done') {
+        item.status = 'done';
+        item.progress = 100;
+        item.uploadedBytes = item.size;
+        item.retryCount = 0;
+        item.errorMessage = '';
+        item.uploadId = null;
+        item.key = null;
+        item.fileId = null;
+        item.chunks = [];
+        await this.saveToStorage(item);
+        return;
+      }
+
+      item.uploadId = typeof data.uploadId === 'string' && data.uploadId ? data.uploadId : item.uploadId;
+      item.key = typeof data.key === 'string' && data.key ? data.key : item.key;
+      item.fileId = typeof data.fileId === 'string' && data.fileId ? data.fileId : item.fileId;
+      item.chunks = this.normalizeParts(data.chunks);
+
+      const totalParts = Number.isFinite(Number(data.totalChunks))
+        ? Number(data.totalChunks)
+        : Math.max(Math.ceil(item.size / CHUNK_SIZE), item.chunks.length);
+      item.uploadedBytes = this.calculateUploadedBytes(item, totalParts);
+      item.progress = item.size > 0 ? Math.min(100, Math.round((item.uploadedBytes / item.size) * 100)) : 0;
+
+      if (item.status !== 'paused' && item.status !== 'error' && item.status !== 'needs_file') {
+        item.status = item.file ? 'paused' : 'needs_file';
+      }
+
+      await this.saveToStorage(item);
+    } catch (error) {
+      console.error('Failed to sync multipart state', error);
+    }
+  }
+
+  backupQueueToLocalStorage() {
+    try {
+      const backup = this.queue.map(item => this.serializeUpload(item, false));
+      localStorage.setItem('cv_upload_backup', JSON.stringify(backup));
+    } catch (error) {
+      console.error('Failed to backup uploads to localStorage', error);
+    }
+  }
+
   pauseAllUploadingOnUnload() {
     const uploadingItems = this.queue.filter(item => item.status === 'uploading');
-    uploadingItems.forEach(item => {
-      // 同步修改状态
+    for (const item of uploadingItems) {
       item.status = 'paused';
-      // 中止网络请求
-      if (item.controller) {
-        item.controller.abort();
-        item.controller = null;
-      }
-      // 尝试异步保存（可能无法完成，但尽量）
+      item.controller?.abort();
+      item.controller = null;
+      item.xhr = null;
+      item.speed = 0;
+      item.eta = 0;
       this.saveToStorage(item);
-    });
-    if (uploadingItems.length > 0) {
-      window.dispatchEvent(new CustomEvent('upload-queue-changed'));
     }
 
-    // 额外备份：将整个队列序列化到 localStorage（同步操作）
-    try {
-      const backup = this.queue.map(item => {
-        // 移除不可序列化的字段
-        const copy = { ...item };
-        delete copy.controller;
-        delete copy.xhr;
-        delete copy.lastUpdate;
-        delete copy.lastLoaded;
-        delete copy.progressUpdateCounter;
-        return copy;
-      });
-      localStorage.setItem('cv_upload_backup', JSON.stringify(backup));
-    } catch (e) {
-      console.error('Failed to backup uploads to localStorage', e);
+    if (uploadingItems.length > 0) {
+      this.dispatch('upload-queue-changed');
     }
+
+    this.backupQueueToLocalStorage();
   }
 
-  // 保存单个任务到存储
   async saveToStorage(item) {
     try {
-      // 深拷贝一份，排除不可序列化的字段
-      const copy = { ...item };
-      delete copy.controller;
-      delete copy.xhr;
-      delete copy.lastUpdate;
-      delete copy.lastLoaded;
-      delete copy.progressUpdateCounter;
-      await saveUpload(copy);
-    } catch (e) {
-      console.error('Failed to save upload', e);
+      await saveUpload(this.serializeUpload(item));
+    } catch (error) {
+      console.error('Failed to save upload', error);
     }
   }
 
-  // 添加文件到队列
+  findDuplicateTask(file, folder) {
+    return this.queue.find(item =>
+      item.name === file.name &&
+      item.size === file.size &&
+      item.folder === folder &&
+      item.status !== 'done' &&
+      item.status !== 'cancelled'
+    );
+  }
+
+  validateFile(file) {
+    if (!(file instanceof File)) {
+      return { valid: false, message: '文件对象无效' };
+    }
+
+    const maxSize = 10 * 1024 * 1024 * 1024;
+    if (!Number.isFinite(file.size) || file.size < 0 || file.size > maxSize) {
+      return { valid: false, message: '文件大小超出限制' };
+    }
+
+    const dotIndex = file.name.lastIndexOf('.');
+    const ext = dotIndex >= 0 ? file.name.slice(dotIndex).toLowerCase() : '';
+    const forbiddenExt = ['.exe', '.sh', '.bat', '.cmd', '.vbs', '.ps1'];
+    if (ext && forbiddenExt.includes(ext)) {
+      return { valid: false, message: '该文件类型不允许上传' };
+    }
+
+    if (!file.name || file.name.includes('/') || file.name.includes('\\')) {
+      return { valid: false, message: '文件名不合法' };
+    }
+
+    return { valid: true, message: '' };
+  }
+
   addFiles(files, folder) {
-    for (const file of files) {
-      // 上传前校验
-      if (!this.validateFile(file)) {
-        window.dispatchEvent(new CustomEvent('upload-error', { 
-          detail: { name: file.name, error: 'File type or size not allowed' }
-        }));
+    const targetFolder = typeof folder === 'string' && folder.trim() ? folder.trim() : 'root';
+    for (const file of Array.from(files || [])) {
+      const validation = this.validateFile(file);
+      if (!validation.valid) {
+        this.dispatch('upload-error', { name: file?.name || '未知文件', error: validation.message });
         continue;
       }
 
-      const id = crypto.randomUUID();
+      if (this.findDuplicateTask(file, targetFolder)) {
+        this.dispatch('upload-skipped', { name: file.name, reason: '已在上传队列中' });
+        continue;
+      }
+
       const item = {
-        id,
+        id: crypto.randomUUID(),
         file,
-        folder,
+        folder: targetFolder,
         name: file.name,
         size: file.size,
-        type: file.type,
-        status: 'pending',      // pending, uploading, paused, done, error, cancelled
+        type: file.type || 'application/octet-stream',
+        status: 'pending',
         progress: 0,
         uploadedBytes: 0,
         speed: 0,
         eta: 0,
         retryCount: 0,
-        chunks: [],             // 对于分块上传，存储 { partNumber, etag } 已完成的分块
-        uploadId: null,         // multipart upload ID
-        key: null,              // R2 object key
-        fileId: null,           // 服务器端文件ID
+        chunks: [],
+        uploadId: null,
+        key: null,
+        fileId: null,
         controller: null,
         xhr: null,
         createdAt: Date.now(),
         lastUpdate: null,
         lastLoaded: 0,
         progressUpdateCounter: 0,
+        speedSamples: [],
+        errorMessage: '',
+        lastModified: Number.isFinite(Number(file.lastModified)) ? Number(file.lastModified) : null,
       };
       this.queue.push(item);
       this.saveToStorage(item);
     }
-    window.dispatchEvent(new CustomEvent('upload-queue-changed'));
+
+    this.dispatch('upload-queue-changed');
     this.processQueue();
   }
 
-  // 文件验证
-  validateFile(file) {
-    // 示例：最大文件 10GB，禁止特定扩展名
-    const maxSize = 10 * 1024 * 1024 * 1024; // 10GB
-    if (file.size > maxSize) return false;
-    const forbiddenExt = ['.exe', '.sh', '.bat', '.cmd', '.vbs', '.ps1'];
-    const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
-    if (forbiddenExt.includes(ext)) return false;
-    return true;
-  }
-
-  // 处理队列
   processQueue() {
     while (this.active < this.maxConcurrent) {
-      const item = this.queue.find(q => 
-        q.status === 'pending' && !q.paused
+      const item = this.queue.find(queueItem =>
+        queueItem.status === 'pending' &&
+        queueItem.file
       );
       if (!item) break;
+
       item.status = 'uploading';
+      item.errorMessage = '';
       this.active++;
-      this.uploadFile(item).finally(() => {
-        this.active--;
-        this.processQueue();
-      });
+      this.dispatch('upload-queue-changed');
+
+      this.uploadFile(item)
+        .finally(() => {
+          this.active = Math.max(0, this.active - 1);
+          this.processQueue();
+        });
     }
   }
 
-  // 上传主逻辑
+  calculatePartBytes(item, partNumber, totalParts) {
+    if (!item || !Number.isFinite(Number(partNumber)) || partNumber <= 0 || !Number.isFinite(Number(totalParts)) || totalParts <= 0) {
+      return 0;
+    }
+
+    const start = (partNumber - 1) * CHUNK_SIZE;
+    if (start >= item.size) return 0;
+
+    if (partNumber === totalParts) {
+      return Math.max(0, item.size - start);
+    }
+
+    return Math.min(CHUNK_SIZE, item.size - start);
+  }
+
+  calculateUploadedBytes(item, totalParts) {
+    const normalizedParts = this.normalizeParts(item?.chunks);
+    return Math.min(
+      normalizedParts.reduce((sum, part) => sum + this.calculatePartBytes(item, part.partNumber, totalParts), 0),
+      item?.size || 0
+    );
+  }
+
   async uploadFile(item) {
-    // 创建 AbortController 用于取消
+    if (!item.file) {
+      item.status = 'needs_file';
+      await this.saveToStorage(item);
+      this.dispatch('upload-queue-changed');
+      return;
+    }
+
     const controller = new AbortController();
     item.controller = controller;
+    item.speed = 0;
+    item.eta = 0;
+    item.speedSamples = [];
+    item.lastUpdate = null;
+    item.lastLoaded = item.uploadedBytes || 0;
 
     try {
-      if (item.size < CHUNK_SIZE * 2) {
-        // 小文件直接上传
+      if (item.size < SMALL_FILE_THRESHOLD) {
+        item.uploadedBytes = 0;
+        item.progress = 0;
         await this.directUpload(item);
       } else {
-        // 大文件分块上传
         await this.multipartUpload(item);
       }
-      // 上传成功
+
       item.status = 'done';
       item.progress = 100;
+      item.uploadedBytes = item.size;
+      item.speed = 0;
+      item.eta = 0;
+      item.retryCount = 0;
+      item.errorMessage = '';
+      item.uploadId = null;
+      item.key = null;
+      item.fileId = null;
+      item.chunks = [];
+      item.controller = null;
+      item.xhr = null;
       await this.saveToStorage(item);
-      window.dispatchEvent(new CustomEvent('upload-complete', { detail: { name: item.name } }));
-    } catch (err) {
-      if (err.name === 'AbortError') {
-        // 用户取消或暂停
+      this.dispatch('upload-complete', { name: item.name });
+      this.dispatch('upload-queue-changed');
+    } catch (error) {
+      if (error?.name === 'AbortError') {
         item.status = 'paused';
         item.controller = null;
+        item.xhr = null;
+        item.speed = 0;
+        item.eta = 0;
         await this.saveToStorage(item);
-        window.dispatchEvent(new CustomEvent('upload-paused', { detail: { name: item.name } }));
+        this.dispatch('upload-paused', { name: item.name });
+        this.dispatch('upload-queue-changed');
         return;
       }
 
-      // 处理错误重试
       item.retryCount = (item.retryCount || 0) + 1;
-      if (item.retryCount <= MAX_RETRIES) {
-        item.status = 'pending'; // 重新加入队列
-        item.controller = null;
+      item.errorMessage = error?.message || '上传失败';
+      item.controller = null;
+      item.xhr = null;
+      item.speed = 0;
+      item.eta = 0;
+
+      if (item.retryCount <= MAX_RETRIES && item.file) {
+        item.status = 'pending';
         await this.saveToStorage(item);
-        window.dispatchEvent(new CustomEvent('upload-retry', { detail: { name: item.name, retry: item.retryCount } }));
-        // 延迟重试
-        setTimeout(() => this.processQueue(), RETRY_DELAY);
+        this.dispatch('upload-retry', {
+          name: item.name,
+          retry: item.retryCount,
+          error: item.errorMessage,
+        });
+        this.dispatch('upload-queue-changed');
+        window.setTimeout(() => this.processQueue(), RETRY_DELAY);
       } else {
-        item.status = 'error';
-        item.controller = null;
+        item.status = item.file ? 'error' : 'needs_file';
         await this.saveToStorage(item);
-        window.dispatchEvent(new CustomEvent('upload-error', { detail: { name: item.name, error: err.message } }));
+        this.dispatch('upload-error', {
+          name: item.name,
+          error: item.errorMessage,
+        });
+        this.dispatch('upload-queue-changed');
       }
     }
   }
 
-  // 直接上传（小文件）
   directUpload(item) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       item.xhr = xhr;
-      const controller = item.controller;
-      const signal = controller.signal;
+      const signal = item.controller.signal;
 
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const loaded = e.loaded;
-          item.uploadedBytes = loaded;
-          item.progress = Math.round((loaded / item.size) * 100);
-          this.updateSpeedAndETA(item, loaded);
-          // 节流保存状态（避免过于频繁）
-          this._debounceSave(item);
-          window.dispatchEvent(new CustomEvent('upload-progress'));
-        }
+      xhr.upload.onprogress = event => {
+        if (!event.lengthComputable) return;
+        const loaded = event.loaded;
+        item.uploadedBytes = loaded;
+        item.progress = item.size > 0 ? Math.round((loaded / item.size) * 100) : 0;
+        this.updateSpeedAndETA(item, loaded);
+        this._debounceSave(item);
+        this.dispatch('upload-progress');
       };
 
       xhr.onload = () => {
+        item.xhr = null;
         if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(JSON.parse(xhr.responseText));
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch {
+            resolve({});
+          }
         } else {
-          reject(new Error(xhr.responseText || 'Upload failed'));
+          reject(new Error(xhr.responseText || '上传失败'));
         }
       };
-      xhr.onerror = () => reject(new Error('Network error'));
 
-      // 处理取消
+      xhr.onerror = () => {
+        item.xhr = null;
+        reject(new Error('网络异常'));
+      };
+
       signal.addEventListener('abort', () => {
         xhr.abort();
         reject(new DOMException('Aborted', 'AbortError'));
-      });
+      }, { once: true });
 
       xhr.open('POST', '/api/files/upload');
       xhr.setRequestHeader('X-File-Name', encodeURIComponent(item.name));
@@ -289,140 +509,156 @@ class UploadManager {
     });
   }
 
-  // 分块上传
-  async multipartUpload(item) {
-    // 1. 如果没有 uploadId，则创建 multipart upload
-    if (!item.uploadId) {
-      const createRes = await fetch('/api/files/upload?action=mpu-create', {
-        method: 'POST',
-        headers: {
-          'X-File-Name': encodeURIComponent(item.name),
-          'X-Folder': encodeURIComponent(item.folder || 'root'),
-          'Content-Type': item.type || 'application/octet-stream',
-          'X-File-Size': item.size.toString(),
-        },
-        credentials: 'same-origin',
-        signal: item.controller.signal,
-      });
-      if (!createRes.ok) throw new Error('Failed to create multipart upload');
-      const { uploadId, key, fileId } = await createRes.json();
-      item.uploadId = uploadId;
-      item.key = key;
-      item.fileId = fileId;
-      await this.saveToStorage(item);
+  async createMultipartSession(item) {
+    const response = await fetch('/api/files/upload?action=mpu-create', {
+      method: 'POST',
+      headers: {
+        'X-File-Name': encodeURIComponent(item.name),
+        'X-Folder': encodeURIComponent(item.folder || 'root'),
+        'Content-Type': item.type || 'application/octet-stream',
+        'X-File-Size': String(item.size),
+      },
+      credentials: 'same-origin',
+      signal: item.controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error('初始化分片上传失败');
     }
 
-    const totalParts = Math.ceil(item.size / CHUNK_SIZE);
-    // 确定已上传的分块（从 item.chunks 恢复）
-    const uploadedParts = new Set(item.chunks.map(c => c.partNumber));
-    const pendingParts = [];
-    for (let i = 1; i <= totalParts; i++) {
-      if (!uploadedParts.has(i)) {
-        pendingParts.push(i);
+    const data = await response.json();
+    if (!data?.uploadId || !data?.key || !data?.fileId) {
+      throw new Error('分片上传会话响应无效');
+    }
+
+    item.uploadId = data.uploadId;
+    item.key = data.key;
+    item.fileId = data.fileId;
+    item.chunks = [];
+    item.uploadedBytes = 0;
+    item.progress = 0;
+    await this.saveToStorage(item);
+  }
+
+  async uploadPartWithRetry(item, partNumber) {
+    let attempt = 0;
+    while (attempt <= MAX_RETRIES) {
+      try {
+        return await this.uploadPart(item, partNumber);
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          throw error;
+        }
+
+        attempt++;
+        if (attempt > MAX_RETRIES) {
+          throw new Error(`分片 ${partNumber} 上传失败`);
+        }
+
+        await this.delay(RETRY_DELAY, item.controller.signal);
       }
     }
 
-    // 并发上传分块
-    const uploadPart = async (partNumber) => {
-      const start = (partNumber - 1) * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, item.size);
-      const chunk = item.file.slice(start, end);
+    throw new Error(`分片 ${partNumber} 上传失败`);
+  }
 
-      const url = `/api/files/upload?action=mpu-upload&uploadId=${encodeURIComponent(item.uploadId)}&partNumber=${partNumber}&key=${encodeURIComponent(item.key)}`;
-      const response = await fetch(url, {
-        method: 'PUT',
-        body: chunk,
-        credentials: 'same-origin',
-        signal: item.controller.signal,
-      });
-      if (!response.ok) throw new Error(`Failed to upload part ${partNumber}`);
-      const partData = await response.json();
-      return { partNumber, etag: partData.etag };
-    };
+  async uploadPart(item, partNumber) {
+    const start = (partNumber - 1) * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, item.size);
+    const chunk = item.file.slice(start, end);
+    const url = `/api/files/upload?action=mpu-upload&uploadId=${encodeURIComponent(item.uploadId)}&partNumber=${partNumber}&key=${encodeURIComponent(item.key)}`;
 
-    // 使用 Promise.all 限制并发数
-    const results = [];
-    const queue = [...pendingParts];
-    let activeChunks = 0;
-
-    return new Promise((resolve, reject) => {
-      const next = async () => {
-        while (queue.length && activeChunks < MAX_CONCURRENT_CHUNKS) {
-          const part = queue.shift();
-          activeChunks++;
-          uploadPart(part)
-            .then(partInfo => {
-              results.push(partInfo);
-              item.chunks.push(partInfo);
-              item.progressUpdateCounter++;
-              
-              // 每上传 PROGRESS_UPDATE_INTERVAL 个分块或完成时更新服务器进度
-              if (item.progressUpdateCounter >= PROGRESS_UPDATE_INTERVAL || 
-                  results.length === totalParts) {
-                this.updateServerProgress(item);
-                item.progressUpdateCounter = 0;
-              }
-              
-              // 更新进度
-              item.uploadedBytes += CHUNK_SIZE;
-              item.progress = Math.round((item.chunks.length / totalParts) * 100);
-              this.updateSpeedAndETA(item, item.uploadedBytes);
-              // 节流保存状态
-              this._debounceSave(item);
-              window.dispatchEvent(new CustomEvent('upload-progress'));
-              activeChunks--;
-              next();
-            })
-            .catch(err => {
-              if (err.name === 'AbortError') {
-                reject(err);
-              } else {
-                // 重试该分块
-                queue.unshift(part);
-                setTimeout(() => next(), RETRY_DELAY);
-              }
-            });
-        }
-        // 如果所有分块上传完成
-        if (results.length === totalParts) {
-          resolve();
-        }
-      };
-      next();
-    }).then(async () => {
-      // 所有分块上传完成，完成 multipart upload
-      const completeRes = await fetch('/api/files/upload?action=mpu-complete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uploadId: item.uploadId,
-          key: item.key,
-          parts: item.chunks,
-          fileId: item.fileId,
-        }),
-        credentials: 'same-origin',
-        signal: item.controller.signal,
-      });
-      if (!completeRes.ok) throw new Error('Failed to complete multipart upload');
-      // 上传完成，清理存储中的临时数据
-      item.uploadId = null;
-      item.key = null;
-      item.fileId = null;
-      item.chunks = [];
-      await this.saveToStorage(item);
+    const response = await fetch(url, {
+      method: 'PUT',
+      body: chunk,
+      credentials: 'same-origin',
+      signal: item.controller.signal,
     });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(text || `分片 ${partNumber} 上传失败`);
+    }
+
+    const partData = await response.json();
+    return { partNumber, etag: partData.etag };
   }
 
-  // 节流保存（避免频繁写入 IndexedDB）
-  _debounceSave(item) {
-    if (item._saveTimeout) clearTimeout(item._saveTimeout);
-    item._saveTimeout = setTimeout(() => {
-      this.saveToStorage(item);
-      item._saveTimeout = null;
-    }, 1000); // 1秒内多次更新只保存一次
+  async multipartUpload(item) {
+    if (!item.file) {
+      throw new Error('缺少本地文件，无法继续上传');
+    }
+
+    if (item.uploadId && item.fileId) {
+      await this.syncRemoteMultipartState(item);
+      if (item.status === 'done') {
+        return;
+      }
+    }
+
+    if (!item.uploadId || !item.key || !item.fileId) {
+      await this.createMultipartSession(item);
+    }
+
+    const totalParts = Math.max(1, Math.ceil(item.size / CHUNK_SIZE));
+    item.chunks = this.normalizeParts(item.chunks);
+    item.uploadedBytes = this.calculateUploadedBytes(item, totalParts);
+    item.progress = item.size > 0 ? Math.round((item.uploadedBytes / item.size) * 100) : 0;
+
+    const uploadedParts = new Set(item.chunks.map(part => part.partNumber));
+    const pendingParts = [];
+    for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+      if (!uploadedParts.has(partNumber)) {
+        pendingParts.push(partNumber);
+      }
+    }
+
+    const workers = Array.from(
+      { length: Math.min(MAX_CONCURRENT_CHUNKS, pendingParts.length || 1) },
+      async () => {
+        while (pendingParts.length > 0) {
+          const partNumber = pendingParts.shift();
+          if (!partNumber) return;
+
+          const partInfo = await this.uploadPartWithRetry(item, partNumber);
+          item.chunks = this.normalizeParts([...item.chunks, partInfo]);
+          item.progressUpdateCounter++;
+          item.uploadedBytes = this.calculateUploadedBytes(item, totalParts);
+          item.progress = item.size > 0 ? Math.min(100, Math.round((item.uploadedBytes / item.size) * 100)) : 100;
+          this.updateSpeedAndETA(item, item.uploadedBytes);
+          this._debounceSave(item);
+          this.dispatch('upload-progress');
+
+          if (item.progressUpdateCounter >= PROGRESS_UPDATE_INTERVAL || item.chunks.length === totalParts) {
+            item.progressUpdateCounter = 0;
+            void this.updateServerProgress(item);
+          }
+        }
+      }
+    );
+
+    await Promise.all(workers);
+    await this.updateServerProgress(item);
+
+    const response = await fetch('/api/files/upload?action=mpu-complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uploadId: item.uploadId,
+        key: item.key,
+        parts: this.normalizeParts(item.chunks),
+        fileId: item.fileId,
+      }),
+      credentials: 'same-origin',
+      signal: item.controller.signal,
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(text || '合并分片失败');
+    }
   }
 
-  // 更新服务器进度
   async updateServerProgress(item) {
     if (!item.fileId || !item.uploadId) return;
     try {
@@ -433,16 +669,41 @@ class UploadManager {
           fileId: item.fileId,
           uploadId: item.uploadId,
           completedChunks: item.chunks.length,
-          chunks: item.chunks,
+          chunks: this.normalizeParts(item.chunks),
         }),
         credentials: 'same-origin',
       });
-    } catch (e) {
-      console.error('Failed to update server progress', e);
+    } catch (error) {
+      console.error('Failed to update server progress', error);
     }
   }
 
-  // 更新速度和剩余时间
+  delay(ms, signal) {
+    return new Promise((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        signal?.removeEventListener('abort', abortHandler);
+        resolve();
+      }, ms);
+
+      const abortHandler = () => {
+        window.clearTimeout(timer);
+        reject(new DOMException('Aborted', 'AbortError'));
+      };
+
+      signal?.addEventListener('abort', abortHandler, { once: true });
+    });
+  }
+
+  _debounceSave(item) {
+    if (item._saveTimeout) {
+      window.clearTimeout(item._saveTimeout);
+    }
+    item._saveTimeout = window.setTimeout(() => {
+      this.saveToStorage(item);
+      item._saveTimeout = null;
+    }, 800);
+  }
+
   updateSpeedAndETA(item, loaded) {
     const now = Date.now();
     if (!item.lastUpdate) {
@@ -450,60 +711,118 @@ class UploadManager {
       item.lastLoaded = loaded;
       return;
     }
-    const timeDiff = (now - item.lastUpdate) / 1000; // 秒
-    if (timeDiff < 0.5) return; // 避免过于频繁更新
 
-    const loadedDiff = loaded - item.lastLoaded;
-    const speed = loadedDiff / timeDiff; // bytes/s
-    // 平滑速度
-    this.speedSamples.push(speed);
-    if (this.speedSamples.length > 10) this.speedSamples.shift();
-    const avgSpeed = this.speedSamples.reduce((a, b) => a + b, 0) / this.speedSamples.length;
+    const timeDiff = (now - item.lastUpdate) / 1000;
+    if (timeDiff < 0.5) return;
 
-    item.speed = avgSpeed;
-    if (avgSpeed > 0) {
-      const remaining = item.size - loaded;
-      item.eta = remaining / avgSpeed; // 秒
-    } else {
-      item.eta = Infinity;
+    const loadedDiff = Math.max(0, loaded - item.lastLoaded);
+    const speed = loadedDiff / timeDiff;
+    item.speedSamples.push(speed);
+    if (item.speedSamples.length > 8) {
+      item.speedSamples.shift();
     }
 
+    const avgSpeed = item.speedSamples.length
+      ? item.speedSamples.reduce((sum, value) => sum + value, 0) / item.speedSamples.length
+      : 0;
+
+    item.speed = avgSpeed;
+    item.eta = avgSpeed > 0 ? Math.max(0, (item.size - loaded) / avgSpeed) : Infinity;
     item.lastUpdate = now;
     item.lastLoaded = loaded;
   }
 
-  // 暂停上传
   pauseUpload(id) {
-    const item = this.queue.find(i => i.id === id);
+    const item = this.queue.find(entry => entry.id === id);
     if (!item) return;
+
     if (item.status === 'uploading') {
-      item.controller?.abort(); // 触发 AbortError
+      item.controller?.abort();
     } else if (item.status === 'pending') {
       item.status = 'paused';
+      item.speed = 0;
+      item.eta = 0;
       this.saveToStorage(item);
+      this.dispatch('upload-queue-changed');
     }
-    window.dispatchEvent(new CustomEvent('upload-queue-changed'));
   }
 
-  // 恢复上传
   resumeUpload(id) {
-    const item = this.queue.find(i => i.id === id);
-    if (!item || item.status !== 'paused') return;
+    const item = this.queue.find(entry => entry.id === id);
+    if (!item) return;
+
+    if (!item.file) {
+      item.status = 'needs_file';
+      this.saveToStorage(item);
+      this.dispatch('upload-needs-file', { id: item.id, name: item.name });
+      this.dispatch('upload-queue-changed');
+      return;
+    }
+
+    if (item.status !== 'paused' && item.status !== 'error' && item.status !== 'needs_file') {
+      return;
+    }
+
     item.status = 'pending';
-    item.retryCount = 0; // 重置重试计数
+    item.retryCount = 0;
+    item.errorMessage = '';
+    item.speed = 0;
+    item.eta = 0;
     this.saveToStorage(item);
-    window.dispatchEvent(new CustomEvent('upload-queue-changed'));
+    this.dispatch('upload-queue-changed');
     this.processQueue();
   }
 
-  // 取消上传
+  async attachFileToUpload(id, file) {
+    const item = this.queue.find(entry => entry.id === id);
+    if (!item) {
+      return { ok: false, message: '上传任务不存在' };
+    }
+
+    const validation = this.validateFile(file);
+    if (!validation.valid) {
+      return { ok: false, message: validation.message };
+    }
+
+    if (file.name !== item.name || file.size !== item.size) {
+      return { ok: false, message: '请选择同名且大小一致的原始文件' };
+    }
+
+    item.file = file;
+    item.type = file.type || item.type;
+    item.lastModified = Number.isFinite(Number(file.lastModified)) ? Number(file.lastModified) : item.lastModified;
+
+    if (item.uploadId && item.fileId) {
+      await this.syncRemoteMultipartState(item);
+      if (item.status === 'done') {
+        this.dispatch('upload-file-attached', { id: item.id, name: item.name, message: '服务器端已完成上传' });
+        this.dispatch('upload-queue-changed');
+        return { ok: true, message: '服务器端已完成上传' };
+      }
+    } else {
+      item.chunks = [];
+      item.uploadedBytes = 0;
+      item.progress = 0;
+    }
+
+    item.status = 'pending';
+    item.retryCount = 0;
+    item.errorMessage = '';
+    await this.saveToStorage(item);
+    this.dispatch('upload-file-attached', { id: item.id, name: item.name, message: '已恢复本地文件，继续上传' });
+    this.dispatch('upload-queue-changed');
+    this.processQueue();
+    return { ok: true, message: '已恢复本地文件，继续上传' };
+  }
+
   async cancelUpload(id) {
-    const item = this.queue.find(i => i.id === id);
+    const item = this.queue.find(entry => entry.id === id);
     if (!item) return;
+
     if (item.status === 'uploading') {
       item.controller?.abort();
     }
-    // 如果是 multipart upload，需要通知后端中止
+
     if (item.uploadId && item.key) {
       try {
         let url = `/api/files/upload?action=mpu-abort&uploadId=${encodeURIComponent(item.uploadId)}&key=${encodeURIComponent(item.key)}`;
@@ -514,110 +833,138 @@ class UploadManager {
           method: 'DELETE',
           credentials: 'same-origin',
         });
-      } catch (e) {
-        console.error('Failed to abort multipart upload', e);
+      } catch (error) {
+        console.error('Failed to abort multipart upload', error);
       }
     }
-    // 从队列中移除
-    this.queue = this.queue.filter(i => i.id !== id);
+
+    this.queue = this.queue.filter(entry => entry.id !== id);
     await deleteUpload(id);
-    window.dispatchEvent(new CustomEvent('upload-queue-changed'));
+    this.dispatch('upload-queue-changed');
   }
 
-  // 暂停全部
   pauseAllUploads() {
-    const toPause = this.queue.filter(item => item.status === 'pending' || item.status === 'uploading');
-    toPause.forEach(item => this.pauseUpload(item.id));
+    for (const item of this.queue.filter(entry => entry.status === 'pending' || entry.status === 'uploading')) {
+      this.pauseUpload(item.id);
+    }
   }
 
-  // 恢复全部
   resumeAllUploads() {
-    const toResume = this.queue.filter(item => item.status === 'paused');
-    toResume.forEach(item => this.resumeUpload(item.id));
+    for (const item of this.queue.filter(entry => entry.status === 'paused' || entry.status === 'error')) {
+      this.resumeUpload(item.id);
+    }
   }
 
-  // 取消全部
   cancelAllUploads() {
-    const toCancel = this.queue.filter(item => item.status !== 'done' && item.status !== 'cancelled');
-    toCancel.forEach(item => this.cancelUpload(item.id));
+    for (const item of this.queue.filter(entry => entry.status !== 'done' && entry.status !== 'cancelled')) {
+      this.cancelUpload(item.id);
+    }
   }
 
-  // 清除已完成/错误的任务
   clearCompleted() {
-    this.queue = this.queue.filter(i => i.status === 'pending' || i.status === 'uploading' || i.status === 'paused');
-    // 从存储中删除已完成/错误的任务
-    getAllUploads().then(all => {
-      all.forEach(u => {
-        if (u.status === 'done' || u.status === 'error' || u.status === 'cancelled') {
-          deleteUpload(u.id);
+    this.queue = this.queue.filter(item =>
+      item.status === 'pending' ||
+      item.status === 'uploading' ||
+      item.status === 'paused' ||
+      item.status === 'needs_file'
+    );
+
+    getAllUploads().then(items => {
+      for (const item of items) {
+        if (item.status === 'done' || item.status === 'error' || item.status === 'cancelled') {
+          deleteUpload(item.id);
         }
-      });
+      }
     });
-    window.dispatchEvent(new CustomEvent('upload-queue-changed'));
+
+    this.dispatch('upload-queue-changed');
   }
 
-  // 重试失败的任务
   retryFailed(id) {
-    const item = this.queue.find(i => i.id === id);
+    const item = this.queue.find(entry => entry.id === id);
     if (!item || item.status !== 'error') return;
+
+    if (!item.file) {
+      item.status = 'needs_file';
+      this.saveToStorage(item);
+      this.dispatch('upload-needs-file', { id: item.id, name: item.name });
+      this.dispatch('upload-queue-changed');
+      return;
+    }
+
     item.status = 'pending';
     item.retryCount = 0;
+    item.errorMessage = '';
     this.saveToStorage(item);
-    window.dispatchEvent(new CustomEvent('upload-queue-changed'));
+    this.dispatch('upload-queue-changed');
     this.processQueue();
   }
 
-  // 获取所有任务
+  getUploadById(id) {
+    return this.queue.find(item => item.id === id) || null;
+  }
+
   getAllItems() {
     return this.queue;
   }
 
-  // 事件监听
-  setupEventListeners() {
-    // 可以监听各种事件
-  }
+  setupEventListeners() {}
 }
 
-// 创建单例
 window.UploadManager = new UploadManager();
 
-// 导出辅助函数供 UI 使用
 window.readDroppedEntries = async function(dataTransfer) {
   const files = [];
-  const items = dataTransfer.items;
+  const items = dataTransfer?.items;
 
   if (items && items[0] && items[0].webkitGetAsEntry) {
     const entries = [];
-    for (let i = 0; i < items.length; i++) {
-      const entry = items[i].webkitGetAsEntry();
+    for (let index = 0; index < items.length; index++) {
+      const entry = items[index].webkitGetAsEntry();
       if (entry) entries.push(entry);
     }
     for (const entry of entries) {
       await readEntry(entry, '', files);
     }
   } else {
-    for (const file of dataTransfer.files) {
+    for (const file of Array.from(dataTransfer?.files || [])) {
       files.push({ file, relativePath: '' });
     }
   }
+
   return files;
 };
 
 function readEntry(entry, path, files) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     if (entry.isFile) {
-      entry.file((file) => {
+      entry.file(file => {
         files.push({ file, relativePath: path });
         resolve();
       });
     } else if (entry.isDirectory) {
       const reader = entry.createReader();
-      reader.readEntries(async (entries) => {
-        for (const e of entries) {
-          await readEntry(e, path ? path + '/' + entry.name : entry.name, files);
+      const nextPath = path ? path + '/' + entry.name : entry.name;
+
+      // WebKit 每次只会返回一批目录项，这里循环直到读空，避免大目录漏文件。
+      const readBatch = async () => {
+        const entries = await new Promise(batchResolve => {
+          reader.readEntries(batchResolve, () => batchResolve([]));
+        });
+
+        if (!Array.isArray(entries) || entries.length === 0) {
+          resolve();
+          return;
         }
-        resolve();
-      });
+
+        for (const currentEntry of entries) {
+          await readEntry(currentEntry, nextPath, files);
+        }
+
+        await readBatch();
+      };
+
+      void readBatch();
     } else {
       resolve();
     }

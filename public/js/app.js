@@ -66,16 +66,20 @@ function cloudvault() {
     _scrollPaginationFrame: 0,
     _viewportFillFrame: 0,
     _remoteAssetPromises: {},
-    _lastMobileScrollTop: 0,
-    mobileToolbarCollapsed: false,
+    _lastToolbarScrollTop: 0,
+    toolbarCollapsed: false,
 
     // 新增计算属性：是否存在等待或上传中的任务
     get anyPendingOrUploading() {
-      return this.uploads.some(u => u.status === 'pending' || u.status === 'uploading');
+      return this.allUploads.some(u => u.status === 'pending' || u.status === 'uploading');
     },
     // 是否存在暂停的任务
     get anyPaused() {
-      return this.uploads.some(u => u.status === 'paused');
+      return this.allUploads.some(u => u.status === 'paused');
+    },
+
+    get anyNeedsFile() {
+      return this.allUploads.some(u => u.status === 'needs_file');
     },
 
     get storageLimitBytes() {
@@ -89,6 +93,77 @@ function cloudvault() {
 
     get storageUsageLabel() {
       return '已使用 ' + this.formatBytes(this.stats.totalSize) + ' / ' + this.formatBytes(this.storageLimitBytes);
+    },
+
+    get currentFolderLabel() {
+      return this.currentFolder === 'root' ? '首页 /' : '/' + this.currentFolder;
+    },
+
+    get uploadStatusCounts() {
+      const counts = {
+        pending: 0,
+        uploading: 0,
+        paused: 0,
+        done: 0,
+        error: 0,
+        needs_file: 0,
+      };
+
+      for (const upload of Array.isArray(this.allUploads) ? this.allUploads : []) {
+        if (!upload || !Object.prototype.hasOwnProperty.call(counts, upload.status)) continue;
+        counts[upload.status] += 1;
+      }
+
+      return counts;
+    },
+
+    get uploadDashboardItems() {
+      return [...(Array.isArray(this.allUploads) ? this.allUploads : [])]
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+        .slice(0, 4);
+    },
+
+    get uploadSummaryCards() {
+      return [
+        {
+          key: 'uploading',
+          label: '进行中',
+          value: this.uploadStatusCounts.uploading + this.uploadStatusCounts.pending,
+          tone: 'accent',
+          helper: this.anyPendingOrUploading ? '等待与上传任务都在这里' : '暂无活动任务',
+        },
+        {
+          key: 'paused',
+          label: '可恢复',
+          value: this.uploadStatusCounts.paused,
+          tone: 'warning',
+          helper: this.uploadStatusCounts.paused > 0 ? '随时继续上传' : '没有暂停任务',
+        },
+        {
+          key: 'needs_file',
+          label: '待补文件',
+          value: this.uploadStatusCounts.needs_file,
+          tone: 'info',
+          helper: this.uploadStatusCounts.needs_file > 0 ? '重新选择原文件即可继续' : '本地文件状态正常',
+        },
+        {
+          key: 'error',
+          label: '异常任务',
+          value: this.uploadStatusCounts.error,
+          tone: 'danger',
+          helper: this.uploadStatusCounts.error > 0 ? '支持单独重试' : '当前没有失败任务',
+        },
+      ];
+    },
+
+    get uploadHeroHint() {
+      if (this.uploadStatusCounts.needs_file > 0) {
+        return '检测到 ' + this.uploadStatusCounts.needs_file + ' 个任务缺少本地文件，重新选择原文件后会从已完成分片继续。';
+      }
+      if (this.anyPendingOrUploading || this.anyPaused) {
+        return '大文件会自动分片并记住已完成进度，刷新页面后仍可继续。';
+      }
+      return '支持文件、文件夹拖拽上传，大文件自动分片，网络中断后可继续。';
     },
 
     get categoryOptions() {
@@ -199,7 +274,7 @@ function cloudvault() {
         if (this._scrollPaginationFrame) return;
         this._scrollPaginationFrame = window.requestAnimationFrame(() => {
           this._scrollPaginationFrame = 0;
-          this.updateMobileToolbarVisibility(container.scrollTop);
+          this.updateToolbarVisibility(container.scrollTop);
           if (container.scrollTop + container.clientHeight + 220 >= container.scrollHeight) {
             this.loadMore();
           }
@@ -207,31 +282,29 @@ function cloudvault() {
       };
 
       container.addEventListener('scroll', onScroll, { passive: true });
-      this.updateMobileToolbarVisibility(container.scrollTop);
+      this.updateToolbarVisibility(container.scrollTop);
       this._scrollPaginationBound = true;
     },
 
-    // 移动端根据滚动方向折叠顶部工具区，给内容区腾出空间。
-    updateMobileToolbarVisibility(scrollTop) {
+    // 根据滚动方向折叠顶部工具区，减少管理后台的纵向占用。
+    updateToolbarVisibility(scrollTop) {
       const top = Number.isFinite(Number(scrollTop)) ? Math.max(Number(scrollTop), 0) : 0;
-      if (window.innerWidth > 768) {
-        this.mobileToolbarCollapsed = false;
-        this._lastMobileScrollTop = top;
-        return;
-      }
-      if (top <= 12) {
-        this.mobileToolbarCollapsed = false;
-        this._lastMobileScrollTop = 0;
+      if (top <= 16) {
+        this.toolbarCollapsed = false;
+        this._lastToolbarScrollTop = 0;
         return;
       }
 
-      const delta = top - this._lastMobileScrollTop;
-      if (delta > 10) {
-        this.mobileToolbarCollapsed = true;
-      } else if (delta < -10) {
-        this.mobileToolbarCollapsed = false;
+      const delta = top - this._lastToolbarScrollTop;
+      const collapseThreshold = window.innerWidth <= 768 ? 10 : 18;
+      const expandThreshold = window.innerWidth <= 768 ? -10 : -16;
+
+      if (delta > collapseThreshold) {
+        this.toolbarCollapsed = true;
+      } else if (delta < expandThreshold) {
+        this.toolbarCollapsed = false;
       }
-      this._lastMobileScrollTop = top;
+      this._lastToolbarScrollTop = top;
     },
 
     queueViewportFillCheck() {
@@ -252,6 +325,40 @@ function cloudvault() {
       if (container.scrollHeight > container.clientHeight + 160) return;
       await this.fetchFiles(true);
       await this.fillViewportIfNeeded(depth + 1);
+    },
+
+    mapUploadItem(item) {
+      return {
+        id: item.id,
+        name: item.name,
+        size: Number.isFinite(Number(item.size)) ? Number(item.size) : 0,
+        progress: Number.isFinite(Number(item.progress)) ? Number(item.progress) : 0,
+        status: item.status || 'pending',
+        speed: Number.isFinite(Number(item.speed)) ? Number(item.speed) : 0,
+        eta: Number.isFinite(Number(item.eta)) ? Number(item.eta) : 0,
+        retryCount: Number.isFinite(Number(item.retryCount)) ? Number(item.retryCount) : 0,
+        createdAt: Number.isFinite(Number(item.createdAt)) ? Number(item.createdAt) : Date.now(),
+        folder: item.folder || 'root',
+        uploadedBytes: Number.isFinite(Number(item.uploadedBytes)) ? Number(item.uploadedBytes) : 0,
+        fileAvailable: !!item.file,
+        uploadId: item.uploadId || null,
+        key: item.key || null,
+        fileId: item.fileId || null,
+        errorMessage: item.errorMessage || '',
+        lastModified: Number.isFinite(Number(item.lastModified)) ? Number(item.lastModified) : null,
+      };
+    },
+
+    syncUploadsFromManager() {
+      if (!window.UploadManager || typeof window.UploadManager.getAllItems !== 'function') {
+        this.uploads = [];
+        this.allUploads = [];
+        return;
+      }
+
+      const items = window.UploadManager.getAllItems().map(item => this.mapUploadItem(item));
+      this.allUploads = items;
+      this.uploads = items.filter(item => item.status === 'pending' || item.status === 'uploading' || item.status === 'paused' || item.status === 'needs_file');
     },
 
     setupDragDrop() {
@@ -282,29 +389,7 @@ function cloudvault() {
       }
       this._uploadEventsBound = true;
 
-      // 定义更新函数
-      const updateUploads = () => {
-        this.uploads = window.UploadManager.queue.map(item => ({
-          id: item.id,
-          name: item.name,
-          progress: item.progress,
-          status: item.status,
-          speed: item.speed,
-          eta: item.eta,
-        }));
-        this.allUploads = window.UploadManager.getAllItems().map(item => ({
-          id: item.id,
-          name: item.name,
-          size: item.size,
-          progress: item.progress,
-          status: item.status,
-          speed: item.speed,
-          eta: item.eta,
-          retryCount: item.retryCount,
-          createdAt: item.createdAt,
-          folder: item.folder,
-        }));
-      };
+      const updateUploads = () => this.syncUploadsFromManager();
 
       // 保存处理函数引用
       this._uploadEventHandlers.updateUploads = updateUploads;
@@ -319,15 +404,30 @@ function cloudvault() {
         this.fetchFolders();
       };
       const errorHandler = (e) => {
-        this.showToast('上传 ' + e.detail.name + ' 失败', 'error');
+        const message = e?.detail?.error ? ('上传 ' + e.detail.name + ' 失败：' + e.detail.error) : ('上传 ' + e.detail.name + ' 失败');
+        this.showToast(message, 'error');
         updateUploads();
       };
       const retryHandler = (e) => {
-        this.showToast(e.detail.name + ' 正在重试 (' + e.detail.retry + '/3)', 'info');
+        this.showToast(e.detail.name + ' 正在重试 (' + e.detail.retry + '/' + 3 + ')', 'info');
         updateUploads();
       };
       const pausedHandler = (e) => {
         this.showToast(e.detail.name + ' 已暂停', 'info');
+        updateUploads();
+      };
+      const skippedHandler = (e) => {
+        this.showToast((e?.detail?.name || '文件') + ' 已在上传队列中', 'info');
+        updateUploads();
+      };
+      const attachHandler = (e) => {
+        if (e?.detail?.message) {
+          this.showToast(e.detail.message, 'success');
+        }
+        updateUploads();
+      };
+      const needsFileHandler = (e) => {
+        this.showToast((e?.detail?.name || '任务') + ' 需要重新选择原文件', 'info');
         updateUploads();
       };
 
@@ -335,6 +435,9 @@ function cloudvault() {
       this._uploadEventHandlers.error = errorHandler;
       this._uploadEventHandlers.retry = retryHandler;
       this._uploadEventHandlers.paused = pausedHandler;
+      this._uploadEventHandlers.skipped = skippedHandler;
+      this._uploadEventHandlers.attach = attachHandler;
+      this._uploadEventHandlers.needsFile = needsFileHandler;
 
       // 添加新监听
       window.addEventListener('upload-progress', updateUploads);
@@ -344,6 +447,10 @@ function cloudvault() {
       window.addEventListener('upload-error', errorHandler);
       window.addEventListener('upload-retry', retryHandler);
       window.addEventListener('upload-paused', pausedHandler);
+      window.addEventListener('upload-skipped', skippedHandler);
+      window.addEventListener('upload-file-attached', attachHandler);
+      window.addEventListener('upload-needs-file', needsFileHandler);
+      updateUploads();
     },
 
     // 批量控制方法
@@ -493,7 +600,6 @@ function cloudvault() {
     openFolderContextMenu(event, shortName) {
       const folder = this.getFolderObject(shortName);
       if (!folder) return;
-      const rect = document.body.getBoundingClientRect();
       let x = event.clientX;
       let y = event.clientY;
       if (x + 200 > window.innerWidth) x = window.innerWidth - 200;
@@ -847,8 +953,8 @@ function cloudvault() {
       if (this._lastNav && now - this._lastNav < 50) return;
       this._lastNav = now;
       const wasOnSameFolder = this.currentFolder === folder;
-      this.mobileToolbarCollapsed = false;
-      this._lastMobileScrollTop = 0;
+      this.toolbarCollapsed = false;
+      this._lastToolbarScrollTop = 0;
       this.currentFolder = folder;
       this.searchQuery = '';
       this.clearSelection();
@@ -1303,7 +1409,6 @@ function cloudvault() {
     },
 
     openContextMenu(event, file) {
-      const rect = document.body.getBoundingClientRect();
       let x = event.clientX;
       let y = event.clientY;
       if (x + 200 > window.innerWidth) x = window.innerWidth - 200;
@@ -1312,9 +1417,30 @@ function cloudvault() {
     },
 
     handleFileSelect(event) {
-      const files = event.target.files;
-      if (files.length) {
+      const files = Array.from(event.target.files || []);
+      if (files.length && window.UploadManager) {
         window.UploadManager.addFiles(files, this.currentFolder);
+      }
+      event.target.value = '';
+    },
+
+    handleFolderSelect(event) {
+      const files = Array.from(event.target.files || []);
+      if (files.length && window.UploadManager) {
+        const grouped = {};
+        for (const file of files) {
+          const relativePath = typeof file.webkitRelativePath === 'string' ? file.webkitRelativePath : '';
+          const parts = relativePath.split('/').filter(Boolean);
+          const folderSuffix = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+          const targetFolder = folderSuffix
+            ? (this.currentFolder === 'root' ? folderSuffix : this.currentFolder + '/' + folderSuffix)
+            : this.currentFolder;
+          if (!grouped[targetFolder]) grouped[targetFolder] = [];
+          grouped[targetFolder].push(file);
+        }
+        for (const [folder, list] of Object.entries(grouped)) {
+          window.UploadManager.addFiles(list, folder);
+        }
       }
       event.target.value = '';
     },
@@ -1326,9 +1452,14 @@ function cloudvault() {
 
       const byFolder = {};
       for (const { file, relativePath } of entries) {
-        const folder = relativePath
-          ? (this.currentFolder === 'root' ? relativePath.split('/')[0] : this.currentFolder + '/' + relativePath.split('/')[0])
-          : this.currentFolder;
+        let folder = this.currentFolder;
+        if (relativePath) {
+          const segments = relativePath.split('/').filter(Boolean);
+          const relativeFolder = segments.length > 1 ? segments.slice(0, -1).join('/') : '';
+          folder = relativeFolder
+            ? (this.currentFolder === 'root' ? relativeFolder : this.currentFolder + '/' + relativeFolder)
+            : this.currentFolder;
+        }
         if (!byFolder[folder]) byFolder[folder] = [];
         byFolder[folder].push(file);
       }
@@ -1494,6 +1625,54 @@ function cloudvault() {
     },
 
     // ========== 上传控制相关方法 ==========
+    getUploadStatusLabel(status) {
+      const labels = {
+        pending: '等待中',
+        uploading: '上传中',
+        paused: '已暂停',
+        done: '已完成',
+        error: '失败',
+        cancelled: '已取消',
+        needs_file: '待补文件',
+      };
+      return labels[status] || status || '未知';
+    },
+
+    getUploadStatusTone(status) {
+      const tones = {
+        pending: 'tone-pending',
+        uploading: 'tone-uploading',
+        paused: 'tone-paused',
+        done: 'tone-done',
+        error: 'tone-error',
+        cancelled: 'tone-cancelled',
+        needs_file: 'tone-needs-file',
+      };
+      return tones[status] || 'tone-pending';
+    },
+
+    async relinkUploadFile(id) {
+      if (!window.UploadManager || typeof window.UploadManager.getUploadById !== 'function') return;
+      const item = window.UploadManager.getUploadById(id);
+      if (!item) return;
+
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = item.type && item.type !== 'application/octet-stream' ? item.type : '';
+      input.style.display = 'none';
+      input.addEventListener('change', async () => {
+        const file = input.files && input.files[0];
+        input.remove();
+        if (!file) return;
+        const result = await window.UploadManager.attachFileToUpload(id, file);
+        if (!result?.ok) {
+          this.showToast(result?.message || '补文件失败', 'error');
+        }
+      }, { once: true });
+      document.body.appendChild(input);
+      input.click();
+    },
+
     pauseUpload(id) {
       if (!window.UploadManager) return;
       window.UploadManager.pauseUpload(id);
@@ -1528,22 +1707,7 @@ function cloudvault() {
 
     openUploadsModal() {
       this.showUploadsModal = true;
-      if (!window.UploadManager || typeof window.UploadManager.getAllItems !== 'function') {
-        this.allUploads = [];
-        return;
-      }
-      this.allUploads = window.UploadManager.getAllItems().map(item => ({
-        id: item.id,
-        name: item.name,
-        size: item.size,
-        progress: item.progress,
-        status: item.status,
-        speed: item.speed,
-        eta: item.eta,
-        retryCount: item.retryCount,
-        createdAt: item.createdAt,
-        folder: item.folder,
-      }));
+      this.syncUploadsFromManager();
     },
 
     // ========== 格式化方法 ==========

@@ -21,6 +21,17 @@ export interface FileMeta {
   sharePassword: string | null; // bcrypt-style hash (null = no password)
   shareExpiresAt: string | null; // ISO 8601 or null
   downloads: number;
+  uploadId?: string | null;
+  uploadChunks?: { partNumber: number; etag: string }[] | null;
+  uploadStatus?: string | null;
+  uploadCreatedAt?: string | null;
+  uploadUpdatedAt?: string | null;
+  uploadTotalChunks?: number | null;
+  uploadCompletedChunks?: number | null;
+  uploadRetryCount?: number | null;
+  uploadError?: string | null;
+  sha1?: string | null;
+  sha256?: string | null;
 }
 
 // ─── Folder Share Info ───────────────────────────────────────────────
