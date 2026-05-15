@@ -6,6 +6,7 @@ import { getAllowedUploadExtensionList, getSettings, isResetInProgress } from '.
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
 const MOVE_CONCURRENCY = 4;
 const RESET_IN_PROGRESS_MESSAGE = '系统正在重置，请稍后再上传';
+const MAX_SYNC_HASH_SIZE = 32 * 1024 * 1024;
 
 type MultipartPart = {
   partNumber: number;
@@ -209,6 +210,46 @@ async function computeHashes(body: ReadableStream<Uint8Array> | null): Promise<{
   const sha1 = Array.from(new Uint8Array(sha1Buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
   const sha256 = Array.from(new Uint8Array(sha256Buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
   return { sha1, sha256 };
+}
+
+async function computeObjectHashes(env: Env, key: string, size: number): Promise<{ sha1: string; sha256: string } | null> {
+  // Workers 的 Web Crypto 只能一次性 digest 全量 Buffer，大文件同步哈希容易耗尽内存。
+  if (!Number.isFinite(size) || size < 0 || size > MAX_SYNC_HASH_SIZE) return null;
+  try {
+    const objectForHash = await env.VAULT_BUCKET.get(key);
+    return objectForHash ? await computeHashes(objectForHash.body) : null;
+  } catch {
+    return null;
+  }
+}
+
+function isMissingMultipartUploadError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err || '');
+  const normalizedMessage = message.toLowerCase();
+  return normalizedMessage.includes('multipart upload does not exist') || normalizedMessage.includes('(10024)');
+}
+
+async function completeMultipartUpload(
+  env: Env,
+  key: string,
+  uploadId: string,
+  parts: MultipartPart[],
+  expectedSize: number
+): Promise<{ size: number }> {
+  const multipart = env.VAULT_BUCKET.resumeMultipartUpload(key, uploadId);
+  try {
+    return await multipart.complete(parts);
+  } catch (err) {
+    if (!isMissingMultipartUploadError(err)) throw err;
+
+    const object = await env.VAULT_BUCKET.head(key);
+    const objectSize = Number(object?.size);
+    if (object && Number.isFinite(objectSize) && objectSize === expectedSize) {
+      return { size: objectSize };
+    }
+
+    throw err;
+  }
 }
 
 async function getFileById(env: Env, id: string): Promise<FileMeta | null> {
@@ -442,8 +483,7 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
   }
 
   // 计算哈希
-  const objectForHash = await env.VAULT_BUCKET.get(key);
-  const hashes = objectForHash ? await computeHashes(objectForHash.body) : null;
+  const hashes = await computeObjectHashes(env, key, r2Object.size);
 
   const meta: FileMeta = {
     id,
@@ -638,12 +678,13 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
   if (normalizedParts.length === 0) return error('No uploaded parts provided', 400);
 
   const row = await env.DB.prepare(
-    `SELECT id, key, upload_id as uploadId, upload_status as uploadStatus, upload_total_chunks as uploadTotalChunks
+    `SELECT id, key, size, upload_id as uploadId, upload_status as uploadStatus, upload_total_chunks as uploadTotalChunks
      FROM files
      WHERE id = ?`
   ).bind(body.fileId).first<{
     id: string;
     key: string;
+    size: number;
     uploadId: string | null;
     uploadStatus: string | null;
     uploadTotalChunks: number | null;
@@ -663,8 +704,7 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
     return error('Multipart upload is incomplete', 400);
   }
 
-  const multipart = env.VAULT_BUCKET.resumeMultipartUpload(body.key, body.uploadId);
-  const r2Object = await multipart.complete(normalizedParts);
+  const r2Object = await completeMultipartUpload(env, body.key, body.uploadId, normalizedParts, Number(row.size));
   if (await isResetInProgress(env)) {
     await env.VAULT_BUCKET.delete(body.key);
     return error(RESET_IN_PROGRESS_MESSAGE, 409);
@@ -672,17 +712,27 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
 
   const now = new Date().toISOString();
 
-  // 计算哈希
-  const objectForHash = await env.VAULT_BUCKET.get(body.key);
-  const hashes = objectForHash ? await computeHashes(objectForHash.body) : null;
-
-  await env.DB.prepare(
+  const updateResult = await env.DB.prepare(
     `UPDATE files SET 
       size = ?, uploaded_at = ?, upload_id = NULL, upload_chunks = NULL,
       upload_status = 'done', upload_updated_at = ?, upload_completed_chunks = upload_total_chunks,
-      upload_retry_count = 0, upload_error = NULL, sha1 = ?, sha256 = ?
-     WHERE id = ?`
-  ).bind(r2Object.size, now, now, hashes?.sha1, hashes?.sha256, body.fileId).run();
+      upload_retry_count = 0, upload_error = NULL, sha1 = NULL, sha256 = NULL
+     WHERE id = ? AND upload_id = ?`
+  ).bind(r2Object.size, now, now, body.fileId, body.uploadId).run();
+
+  const changedRows = Number(updateResult.meta?.changes ?? 1);
+  if (changedRows === 0) {
+    const meta = await getFileById(env, body.fileId);
+    if (meta && (!meta.uploadStatus || meta.uploadStatus === 'done')) return json(meta, 200);
+    return error('Upload session mismatch', 409);
+  }
+
+  const hashes = await computeObjectHashes(env, body.key, r2Object.size);
+  if (hashes) {
+    await env.DB.prepare(
+      `UPDATE files SET sha1 = ?, sha256 = ? WHERE id = ?`
+    ).bind(hashes.sha1, hashes.sha256, body.fileId).run();
+  }
 
   const meta = await getFileById(env, body.fileId);
   if (!meta) return error('File not found', 404);
