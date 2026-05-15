@@ -271,7 +271,14 @@ class UploadManager {
       item.uploadedBytes = this.calculateUploadedBytes(item, totalParts);
       item.progress = item.size > 0 ? Math.min(100, Math.round((item.uploadedBytes / item.size) * 100)) : 0;
 
-      if (item.status !== 'paused' && item.status !== 'error' && item.status !== 'needs_file') {
+      if (
+        item.status !== 'pending' &&
+        item.status !== 'uploading' &&
+        item.status !== 'pausing' &&
+        item.status !== 'paused' &&
+        item.status !== 'error' &&
+        item.status !== 'needs_file'
+      ) {
         item.status = item.file ? 'paused' : 'needs_file';
       }
 

@@ -85,6 +85,10 @@ function cloudvault() {
       return this.allUploads.some(u => u.status === 'paused');
     },
 
+    get anyResumableUploads() {
+      return this.allUploads.some(u => u.status === 'paused' || u.status === 'error');
+    },
+
     get anyNeedsFile() {
       return this.allUploads.some(u => u.status === 'needs_file');
     },
@@ -226,22 +230,24 @@ function cloudvault() {
 
     // MODIFIED: 返回文件夹对象而不是只返回名称
     get currentSubfolders() {
-      // 搜索结果只展示匹配到的文件，不混入目录项。
-      if (typeof this.searchQuery === 'string' && this.searchQuery.trim()) {
-        return [];
-      }
+      const search = typeof this.searchQuery === 'string' ? this.searchQuery.trim().toLowerCase() : '';
 
       if (this.currentFolder === 'root') {
-        // 根目录下的直接子文件夹（不包含路径分隔符的）
-        return this.folders
-          .filter(f => !f.name.includes('/'))
-          .map(f => ({ ...f, shortName: f.name }));
-      } else {
-        const prefix = this.currentFolder + '/';
-        return this.folders
-          .filter(f => f.name.startsWith(prefix) && !f.name.slice(prefix.length).includes('/'))
-          .map(f => ({ ...f, shortName: f.name.slice(prefix.length) }));
+        const rootFolders = this.folders.filter(f => {
+          if (search) return f.name.toLowerCase().includes(search);
+          return !f.name.includes('/');
+        });
+        return rootFolders.map(f => ({ ...f, shortName: f.name }));
       }
+
+      const prefix = this.currentFolder + '/';
+      const nestedFolders = this.folders.filter(f => {
+        if (!f.name.startsWith(prefix)) return false;
+        const relativeName = f.name.slice(prefix.length);
+        if (search) return relativeName.toLowerCase().includes(search);
+        return !relativeName.includes('/');
+      });
+      return nestedFolders.map(f => ({ ...f, shortName: f.name.slice(prefix.length) }));
     },
 
     async init() {
@@ -622,7 +628,9 @@ function cloudvault() {
     },
 
     getFolderObject(shortName) {
-      const fullPath = this.currentFolder === 'root' ? shortName : this.currentFolder + '/' + shortName;
+      const rawName = typeof shortName === 'string' ? shortName : '';
+      const scopedPath = this.currentFolder === 'root' ? rawName : this.currentFolder + '/' + rawName;
+      const fullPath = this.folders.some(f => f.name === scopedPath) ? scopedPath : rawName;
       return this.folders.find(f => f.name === fullPath) || { name: fullPath, shared: false, directlyShared: false, excluded: false };
     },
 
