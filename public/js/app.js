@@ -1541,6 +1541,10 @@ function cloudvault() {
       return map[ext] || type || 'application/octet-stream';
     },
 
+    canPreviewFile(file) {
+      return this.getFilePreviewMode(file) !== 'none';
+    },
+
     isTextPreviewable(file) {
       const type = (file?.type || '').toLowerCase();
       const name = (file?.name || '').toLowerCase();
@@ -1564,6 +1568,8 @@ function cloudvault() {
         yml: 'yaml',
         md: 'markdown',
         markdown: 'markdown',
+        txt: 'plain',
+        log: 'plain',
         jsx: 'jsx',
         tsx: 'tsx',
         h: 'c',
@@ -1623,7 +1629,7 @@ function cloudvault() {
             this.previewModal.content = note + '<div class="preview-markdown">' + (markedReady ? window.marked.parse(text) : '<pre>' + this._escHtml(text) + '</pre>') + '</div>';
           } else {
             const lang = this.getPreviewLanguage(file.name);
-            const prismReady = await this.ensurePrismReady();
+            const prismReady = lang !== 'plain' ? await this.ensurePrismReady() : false;
             this.previewModal.content = note + '<pre class="preview-code"><code class="language-' + this._escAttr(lang || 'plain') + '">' + this._escHtml(text) + '</code></pre>';
             if (prismReady && typeof this.$nextTick === 'function') {
               this.$nextTick(() => {
