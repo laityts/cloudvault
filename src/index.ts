@@ -237,6 +237,7 @@ async function handleApiRoutes(
   if (path === '/api/stats' && method === 'GET') return stats.getStats(request, env);
   if (path === '/api/settings' && method === 'GET') return settings.handleGetSettings(request, env);
   if (path === '/api/settings' && method === 'PUT') return settings.handlePutSettings(request, env);
+  if (path === '/api/settings/reset' && method === 'POST') return settings.handleResetAllData(request, env);
 
   return error('Not found', 404);
 }

@@ -1,4 +1,4 @@
-import { Env, FileMeta, MoveFilesRequest, MoveFilesResponse, MoveFolderRequest, MoveFolderResponse } from '../utils/types';
+import { Env, FileMeta, MoveFilesRequest, MoveFilesResponse, MoveFolderRequest, MoveFolderResponse, CleanupIncompleteUploadsResponse } from '../utils/types';
 import { json, error, getMimeType } from '../utils/response';
 import { getSharedFolders, getExcludedFolders, isFolderShared } from './share';
 import { getAllowedUploadExtensionList, getSettings } from './settings';
@@ -71,6 +71,13 @@ type StoredFileRow = {
   name: string;
   folder: string;
   uploadStatus?: string | null;
+};
+
+type IncompleteUploadRow = {
+  id: string;
+  key: string;
+  uploadId: string | null;
+  uploadStatus: string | null;
 };
 
 async function readJsonBody<T>(request: Request): Promise<T | null> {
@@ -379,6 +386,9 @@ export async function upload(request: Request, env: Env): Promise<Response> {
   }
   if (action === 'mpu-progress') {
     return handleMultipartProgress(request, env);
+  }
+  if (action === 'cleanup-incomplete') {
+    return handleCleanupIncompleteUploads(env);
   }
 
   return handleDirectUpload(request, env);
@@ -719,6 +729,52 @@ async function handleMultipartProgress(request: Request, env: Env): Promise<Resp
      WHERE id = ? AND upload_id = ?`
   ).bind(completedChunks, JSON.stringify(chunks), new Date().toISOString(), body.fileId, body.uploadId).run();
   return json({ success: true, completedChunks });
+}
+
+async function listIncompleteUploadRows(env: Env): Promise<IncompleteUploadRow[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, key, upload_id as uploadId, upload_status as uploadStatus
+     FROM files
+     WHERE upload_status IS NOT NULL
+       AND upload_status != 'done'`
+  ).all<IncompleteUploadRow>();
+
+  return Array.isArray(rows.results)
+    ? rows.results.map(row => ({
+        id: row.id as string,
+        key: row.key as string,
+        uploadId: typeof row.uploadId === 'string' && row.uploadId ? row.uploadId : null,
+        uploadStatus: typeof row.uploadStatus === 'string' ? row.uploadStatus : null,
+      }))
+    : [];
+}
+
+async function handleCleanupIncompleteUploads(env: Env): Promise<Response> {
+  const rows = await listIncompleteUploadRows(env);
+  let abortedMultipartUploads = 0;
+
+  // 先尝试中止远端 multipart，会比单删数据库记录更干净，避免残留未提交分片。
+  await runWithConcurrency(rows, MOVE_CONCURRENCY, async row => {
+    if (!row.uploadId || !row.key || row.key.includes('\\') || row.key.includes('..')) return;
+    try {
+      const multipart = env.VAULT_BUCKET.resumeMultipartUpload(row.key, row.uploadId);
+      await multipart.abort();
+      abortedMultipartUploads += 1;
+    } catch {
+      // 这里允许继续删库，避免异常 multipart 状态把清理入口卡死。
+    }
+  });
+
+  await env.DB.prepare(
+    `DELETE FROM files
+     WHERE upload_status IS NOT NULL
+       AND upload_status != 'done'`
+  ).run();
+
+  return json<CleanupIncompleteUploadsResponse>({
+    deletedTasks: rows.length,
+    abortedMultipartUploads,
+  });
 }
 
 export async function list(request: Request, env: Env): Promise<Response> {

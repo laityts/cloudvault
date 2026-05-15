@@ -113,6 +113,16 @@ export interface MultipartCompleteRequest {
   parts: { partNumber: number; etag: string }[];
 }
 
+export interface ResetAllDataResponse {
+  deletedObjects: number;
+  resetTables: string[];
+}
+
+export interface CleanupIncompleteUploadsResponse {
+  deletedTasks: number;
+  abortedMultipartUploads: number;
+}
+
 // ─── Site Settings ────────────────────────────────────────────────────
 export interface SiteSettings {
   guestPageEnabled: boolean;

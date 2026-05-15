@@ -1,4 +1,4 @@
-import { Env, SiteSettings, DEFAULT_SETTINGS } from '../utils/types';
+import { Env, SiteSettings, DEFAULT_SETTINGS, ResetAllDataResponse } from '../utils/types';
 import { json, error } from '../utils/response';
 
 const SETTINGS_KEY = 'site';
@@ -88,4 +88,66 @@ export async function handlePutSettings(request: Request, env: Env): Promise<Res
   ).bind(SETTINGS_KEY, JSON.stringify(current)).run();
 
   return json(current);
+}
+
+async function deleteAllBucketObjects(env: Env): Promise<number> {
+  let deletedObjects = 0;
+  let cursor: string | undefined;
+
+  while (true) {
+    // R2 列表默认分页，重置时必须把整桶对象遍历完，否则数据库清空后会遗留孤儿文件。
+    const listed = await env.VAULT_BUCKET.list({
+      cursor,
+      limit: 1000,
+    });
+    const keys = Array.isArray(listed.objects)
+      ? listed.objects
+          .map(object => typeof object?.key === 'string' ? object.key : '')
+          .filter(Boolean)
+      : [];
+
+    if (keys.length > 0) {
+      await env.VAULT_BUCKET.delete(keys);
+      deletedObjects += keys.length;
+    }
+
+    if (!listed.truncated || !listed.cursor) break;
+    cursor = listed.cursor;
+  }
+
+  return deletedObjects;
+}
+
+export async function handleResetAllData(_request: Request, env: Env): Promise<Response> {
+  const deletedObjects = await deleteAllBucketObjects(env);
+  const resetTables = [
+    'files',
+    'folders',
+    'folder_shares',
+    'folder_excludes',
+    'folder_share_links',
+    'folder_share_meta',
+    'sessions',
+    'settings',
+    'stats',
+  ];
+
+  // 只重置业务数据，管理员密码和密钥来自环境变量，不在数据库里。
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM files`),
+    env.DB.prepare(`DELETE FROM folders`),
+    env.DB.prepare(`DELETE FROM folder_shares`),
+    env.DB.prepare(`DELETE FROM folder_excludes`),
+    env.DB.prepare(`DELETE FROM folder_share_links`),
+    env.DB.prepare(`DELETE FROM folder_share_meta`),
+    env.DB.prepare(`DELETE FROM sessions`),
+    env.DB.prepare(`DELETE FROM settings`),
+    env.DB.prepare(`DELETE FROM stats`),
+    env.DB.prepare(`INSERT INTO stats (id, total_files, total_size) VALUES (1, 0, 0)`),
+  ]);
+
+  return json<ResetAllDataResponse>({
+    deletedObjects,
+    resetTables,
+  });
 }

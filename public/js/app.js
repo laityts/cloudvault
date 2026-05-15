@@ -28,7 +28,7 @@ function cloudvault() {
     deleteModal: { show: false, ids: [] },
     moveModal: { show: false, mode: 'files', files: [], folder: '', targetFolder: 'root' },
     _branding: JSON.parse(document.getElementById('branding-data')?.textContent || '{"siteName":"CloudVault","siteIconUrl":""}'),
-    settingsModal: { show: false, guestPageEnabled: false, showLoginButton: true, siteName: 'CloudVault', siteIconUrl: '', allowedUploadExtensions: '', _iconError: false },
+    settingsModal: { show: false, guestPageEnabled: false, showLoginButton: true, siteName: 'CloudVault', siteIconUrl: '', allowedUploadExtensions: '', _iconError: false, resetting: false },
     renameFolderModal: { show: false, oldName: '', newName: '' },
     deleteFolderModal: { show: false, folder: '' },
     typeFilter: 'all',
@@ -59,6 +59,7 @@ function cloudvault() {
     },
 
     showUploadsModal: false,
+    uploadCleanupRunning: false,
     allUploads: [],
 
     // 用于存储事件处理函数引用，以便移除
@@ -92,6 +93,14 @@ function cloudvault() {
 
     get anyNeedsFile() {
       return this.allUploads.some(u => u.status === 'needs_file');
+    },
+
+    get incompleteUploadCount() {
+      return this.allUploads.filter(u => u.status !== 'done' && u.status !== 'cancelled').length;
+    },
+
+    get hasIncompleteUploads() {
+      return this.incompleteUploadCount > 0;
     },
 
     get storageLimitBytes() {
@@ -1945,6 +1954,89 @@ function cloudvault() {
       localStorage.setItem('cloudvault-theme', this.darkMode ? 'dark' : 'light');
     },
 
+    getDefaultSettingsState() {
+      return {
+        guestPageEnabled: false,
+        showLoginButton: true,
+        siteName: 'CloudVault',
+        siteIconUrl: '',
+        allowedUploadExtensions: '',
+        _iconError: false,
+        resetting: false,
+      };
+    },
+
+    getDefaultStatsState() {
+      return {
+        totalFiles: 0,
+        totalSize: 0,
+        totalDownloads: 0,
+        recentUploads: [],
+        topDownloaded: [],
+      };
+    },
+
+    applyBranding(siteName, siteIconUrl) {
+      this._branding.siteName = siteName || 'CloudVault';
+      this._branding.siteIconUrl = siteIconUrl || '';
+      document.title = this._branding.siteName;
+      var fi = document.querySelector('link[rel="icon"]');
+      if (this._branding.siteIconUrl) {
+        if (!fi) {
+          fi = document.createElement('link');
+          fi.rel = 'icon';
+          document.head.appendChild(fi);
+        }
+        fi.href = this._branding.siteIconUrl;
+      } else if (fi) {
+        fi.remove();
+      }
+    },
+
+    async clearClientUploadState() {
+      localStorage.removeItem('cv_upload_backup');
+      if (window.UploadManager && typeof window.UploadManager.clearAllState === 'function') {
+        await window.UploadManager.clearAllState();
+      }
+      this.uploads = [];
+      this.allUploads = [];
+      this.showUploadsModal = false;
+    },
+
+    resetClientDataState() {
+      if (this._filesAbortController) {
+        this._filesAbortController.abort();
+        this._filesAbortController = null;
+      }
+      this.files = [];
+      this.folders = [];
+      this.stats = this.getDefaultStatsState();
+      this.currentFolder = 'root';
+      this.searchQuery = '';
+      this.typeFilter = 'all';
+      this.page = 1;
+      this.hasMore = true;
+      this.loading = false;
+      this.loadingMore = false;
+      this.toolbarCollapsed = false;
+      this.selectedFiles = new Set();
+      this.expandedFolders = { '__root__': true };
+      this._folderShareHash = '';
+      this._expandVer++;
+      this.cache = {};
+      this.previewModal = { show: false, file: null, content: '', loading: false };
+      this.lightbox = { show: false, images: [], currentIndex: 0 };
+      this.shareModal.show = false;
+      this.renameModal.show = false;
+      this.deleteModal.show = false;
+      this.moveModal.show = false;
+      this.renameFolderModal.show = false;
+      this.deleteFolderModal.show = false;
+      this.folderShareLinkModal.show = false;
+      this.fileInfoModal.show = false;
+      this.sharesModal.show = false;
+    },
+
     async loadSettings() {
       try {
         const res = await this.apiFetch('/api/settings');
@@ -1956,6 +2048,7 @@ function cloudvault() {
           this.settingsModal.siteIconUrl = data.siteIconUrl || '';
           this.settingsModal.allowedUploadExtensions = data.allowedUploadExtensions || '';
           this.settingsModal._iconError = false;
+          this.settingsModal.resetting = false;
         }
       } catch { /* use defaults */ }
     },
@@ -1982,17 +2075,54 @@ function cloudvault() {
             this.settingsModal.siteIconUrl = data.siteIconUrl || '';
             this.settingsModal.allowedUploadExtensions = data.allowedUploadExtensions || '';
             this.settingsModal._iconError = false;
+            this.settingsModal.resetting = false;
           }
-          this._branding.siteName = this.settingsModal.siteName || 'CloudVault';
-          this._branding.siteIconUrl = this.settingsModal.siteIconUrl || '';
-          document.title = this._branding.siteName;
-          var fi = document.querySelector('link[rel="icon"]');
-          if (this._branding.siteIconUrl) { if (!fi) { fi = document.createElement('link'); fi.rel = 'icon'; document.head.appendChild(fi); } fi.href = this._branding.siteIconUrl; }
-          else if (fi) { fi.remove(); }
+          this.applyBranding(this.settingsModal.siteName, this.settingsModal.siteIconUrl);
           this.settingsModal.show = false;
           this.showToast('设置已保存', 'success');
         } else { this.showToast('保存设置失败', 'error'); }
       } catch { this.showToast('保存设置失败', 'error'); }
+    },
+
+    async resetAllData() {
+      if (this.settingsModal.resetting) return;
+
+      const confirmed = window.confirm('该操作会删除全部文件、文件夹、分享链接、上传记录、设置和会话，并将数据库恢复到初始状态。是否继续？');
+      if (!confirmed) return;
+
+      const keyword = window.prompt('请输入 RESET 确认清空全部数据');
+      if (keyword !== 'RESET') {
+        this.showToast('已取消重置操作', 'info');
+        return;
+      }
+
+      this.settingsModal.resetting = true;
+      try {
+        const res = await this.apiFetch('/api/settings/reset', {
+          method: 'POST',
+        });
+        if (!res || !res.ok) {
+          this.settingsModal.resetting = false;
+          this.showToast(await this.readApiError(res, '重置失败'), 'error');
+          return;
+        }
+
+        await this.clearClientUploadState();
+        this.resetClientDataState();
+        this.settingsModal = {
+          ...this.settingsModal,
+          ...this.getDefaultSettingsState(),
+          show: false,
+        };
+        this.applyBranding('CloudVault', '');
+        this.showToast('全部数据已清空，正在返回登录页', 'success');
+        window.setTimeout(() => {
+          window.location.href = '/login';
+        }, 600);
+      } catch {
+        this.settingsModal.resetting = false;
+        this.showToast('重置失败', 'error');
+      }
     },
 
     async logout() {
@@ -2230,6 +2360,59 @@ function cloudvault() {
     clearCompletedUploads() {
       if (!window.UploadManager) return;
       window.UploadManager.clearCompleted();
+    },
+    async cleanupIncompleteUploads() {
+      if (this.uploadCleanupRunning) return;
+
+      const confirmed = window.confirm('确定清理所有未完成任务吗？这会移除本地上传队列，并清除数据库中的未完成上传记录。即使本地列表为空，也会尝试清理数据库残留。');
+      if (!confirmed) return;
+
+      const localIncompleteCount = this.incompleteUploadCount;
+      let localClearedCount = 0;
+
+      this.uploadCleanupRunning = true;
+      try {
+        if (window.UploadManager && typeof window.UploadManager.clearIncompleteState === 'function') {
+          localClearedCount = await window.UploadManager.clearIncompleteState();
+        }
+
+        const res = await this.apiFetch('/api/files/upload?action=cleanup-incomplete', {
+          method: 'POST',
+        });
+        this.syncUploadsFromManager();
+
+        if (!res || !res.ok) {
+          const message = await this.readApiError(res, '服务器未完成任务清理失败');
+          const prefix = localClearedCount > 0 ? '本地未完成任务已清理，' : '';
+          this.showToast(prefix + message, 'error');
+          return;
+        }
+
+        const data = await res.json().catch(() => null);
+        const deletedTasks = Number.isFinite(Number(data?.deletedTasks)) ? Number(data.deletedTasks) : 0;
+        const abortedMultipartUploads = Number.isFinite(Number(data?.abortedMultipartUploads)) ? Number(data.abortedMultipartUploads) : 0;
+        if ((localClearedCount || localIncompleteCount) === 0 && deletedTasks === 0) {
+          this.showToast('没有检测到需要清理的未完成任务', 'info');
+          return;
+        }
+        const clearedLocalCount = localClearedCount || localIncompleteCount;
+        const localSummary = clearedLocalCount > 0
+          ? '已清理 ' + clearedLocalCount + ' 个本地未完成任务'
+          : '本地没有残留未完成任务';
+        const serverSummary = deletedTasks > 0
+          ? '，数据库清理 ' + deletedTasks + ' 条记录'
+          : '，数据库没有残留未完成记录';
+        const multipartSummary = abortedMultipartUploads > 0
+          ? '，并中止 ' + abortedMultipartUploads + ' 个分片上传'
+          : '';
+        this.showToast(localSummary + serverSummary + multipartSummary, 'success');
+      } catch {
+        this.syncUploadsFromManager();
+        const prefix = localClearedCount > 0 ? '本地未完成任务已清理，' : '';
+        this.showToast(prefix + '服务器未完成任务清理失败', 'error');
+      } finally {
+        this.uploadCleanupRunning = false;
+      }
     },
     formatTime(seconds) {
       if (seconds === Infinity || seconds === 0) return '剩余时间未知';

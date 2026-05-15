@@ -1,4 +1,4 @@
-import { saveUpload, getAllUploads, deleteUpload } from './db.js';
+import { saveUpload, getAllUploads, deleteUpload, clearUploads } from './db.js';
 
 const CHUNK_SIZE = 5 * 1024 * 1024;
 const SMALL_FILE_THRESHOLD = CHUNK_SIZE;
@@ -1237,6 +1237,54 @@ class UploadManager {
       }
     });
 
+    this.dispatch('upload-queue-changed');
+  }
+
+  async clearIncompleteState() {
+    const removableItems = this.queue.filter(item => item.status !== 'done' && item.status !== 'cancelled');
+    if (removableItems.length === 0) return 0;
+
+    this.queue = this.queue.filter(item => item.status === 'done' || item.status === 'cancelled');
+
+    for (const item of removableItems) {
+      if (item?._saveTimeout) {
+        window.clearTimeout(item._saveTimeout);
+        item._saveTimeout = null;
+      }
+      if (item?.controller) {
+        try {
+          item.controller.abort();
+        } catch {}
+      }
+      item.controller = null;
+      item.xhr = null;
+    }
+
+    await Promise.all(removableItems.map(item => deleteUpload(item.id)));
+
+    if (this.queue.length > 0) {
+      this.backupQueueToLocalStorage();
+    } else {
+      localStorage.removeItem('cv_upload_backup');
+    }
+
+    this.dispatch('upload-queue-changed');
+    return removableItems.length;
+  }
+
+  async clearAllState() {
+    for (const item of this.queue) {
+      if (item?.controller) {
+        try {
+          item.controller.abort();
+        } catch {}
+      }
+    }
+
+    // 后台已清空后，本地上传缓存也要一起清掉，避免界面继续显示失效任务。
+    this.queue = [];
+    localStorage.removeItem('cv_upload_backup');
+    await clearUploads();
     this.dispatch('upload-queue-changed');
   }
 
