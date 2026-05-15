@@ -15,8 +15,8 @@ A personal cloud storage platform built on **Cloudflare Workers + R2**. Zero ser
 ### 功能亮点
 
 **文件与文件夹管理**
-- 上传、下载、重命名、移动、删除，支持顶部工具栏文件/文件夹上传、拖拽上传与 5MB 以上文件自动分片续传
-- 上传任务面板支持暂停、继续、批量补文件/补文件夹，刷新后可按原路径恢复断点任务
+- 上传、下载、重命名、移动、删除，支持顶部工具栏文件上传、拖拽上传与 5MB 以上文件自动分片续传
+- 上传任务面板支持暂停、继续和补选原文件，刷新后可按原文件继续断点任务
 - 无限嵌套文件夹，侧边栏文件夹树可展开/折叠
 - 多文件选择，批量打包 ZIP 下载
 - 级联删除 — 删除文件夹时自动删除所有子文件和子文件夹
@@ -201,8 +201,8 @@ cloudvault/
 ### Feature Highlights
 
 **File & Folder Management**
-- Upload, download, rename, move, delete — with toolbar-based file/folder upload, drag-and-drop, and automatic chunked resume for files larger than 5MB
-- The upload task panel supports pause, resume, and bulk re-linking for files or folders so interrupted tasks can continue from their original paths
+- Upload, download, rename, move, delete — with toolbar-based file upload, drag-and-drop, and automatic chunked resume for files larger than 5MB
+- The upload task panel supports pause, resume, and re-linking the original file so interrupted tasks can continue from the saved checkpoint
 - Unlimited nested folders with collapsible sidebar folder tree
 - Multi-select files for batch ZIP download
 - Cascade delete — deleting a folder removes all child files and sub-folders

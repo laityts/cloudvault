@@ -63,8 +63,9 @@ export interface Session {
 // ─── API Response Types ───────────────────────────────────────────────
 export interface FileListResponse {
   files: FileMeta[];
-  cursor: string | null;    // 可能不再需要，但保留兼容
-  totalFiles: number;
+  hasMore: boolean;
+  total?: number | null;
+  cursor?: string | null;
 }
 
 export interface StatsResponse {

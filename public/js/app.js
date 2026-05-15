@@ -68,6 +68,7 @@ function cloudvault() {
     _scrollPaginationFrame: 0,
     _viewportFillFrame: 0,
     _remoteAssetPromises: {},
+    _filesAbortController: null,
     _lastToolbarScrollTop: 0,
     toolbarCollapsed: false,
 
@@ -82,10 +83,6 @@ function cloudvault() {
 
     get anyNeedsFile() {
       return this.allUploads.some(u => u.status === 'needs_file');
-    },
-
-    get uploadNeedsFolderRestore() {
-      return this.allUploads.some(u => u.status === 'needs_file' && typeof u.relativePath === 'string' && u.relativePath.includes('/'));
     },
 
     get storageLimitBytes() {
@@ -169,7 +166,7 @@ function cloudvault() {
       if (this.anyPendingOrUploading || this.anyPaused) {
         return '大文件会自动分片并记住已完成进度，刷新页面后仍可继续。';
       }
-      return '支持文件、文件夹拖拽上传，大文件自动分片，网络中断后可继续。';
+      return '支持文件拖拽上传，大文件自动分片，网络中断后可继续。';
     },
 
     get categoryOptions() {
@@ -267,8 +264,7 @@ function cloudvault() {
       const statsTask = this.fetchStats();
 
       await this.fetchFiles(false);
-      await Promise.allSettled([foldersTask, statsTask]);
-      this.loading = false;
+      void Promise.allSettled([foldersTask, statsTask]);
     },
 
     setupScrollPagination() {
@@ -444,7 +440,10 @@ function cloudvault() {
         updateUploads();
       };
       const skippedHandler = (e) => {
-        this.showToast((e?.detail?.name || '文件') + ' 已在上传队列中', 'info');
+        const reason = typeof e?.detail?.reason === 'string' && e.detail.reason.trim()
+          ? e.detail.reason.trim()
+          : '已在上传队列中';
+        this.showToast((e?.detail?.name || '文件') + ' ' + reason, 'info');
         updateUploads();
       };
       const attachHandler = (e) => {
@@ -831,11 +830,16 @@ function cloudvault() {
         this.hasMore = true;
         this.files = [];
         this.loading = true;
+        if (this._filesAbortController) {
+          this._filesAbortController.abort();
+        }
+        this._filesAbortController = new AbortController();
       } else if (!this.hasMore || this.loadingMore) {
         return;
       }
 
       this.loadingMore = append;
+      const requestSignal = append ? null : this._filesAbortController?.signal;
       try {
         const cacheKey = `files_${this.currentFolder}_${this.searchQuery}_page${this.page}`;
         const cached = this.cache[cacheKey];
@@ -857,7 +861,7 @@ function cloudvault() {
           limit: String(this.limit),
           offset: String((this.page - 1) * this.limit),
         });
-        const res = await this.apiFetch('/api/files?' + params);
+        const res = await this.apiFetch('/api/files?' + params, requestSignal ? { signal: requestSignal } : {});
         if (!res) return;
         if (!res.ok) throw new Error('Files API returned ' + res.status);
 
@@ -892,15 +896,24 @@ function cloudvault() {
         this.hasMore = hasMore;
         if (files.length > 0) this.page++;
       } catch (error) {
+        if (error?.name === 'AbortError') {
+          return;
+        }
         console.error('Failed to fetch files:', error);
         if (!append) {
           this.files = [];
           this.showToast('文件列表加载失败，请稍后重试', 'error');
         }
       } finally {
-        this.loading = false;
-        this.loadingMore = false;
-        this.queueViewportFillCheck();
+        const isCurrentRequest = append || this._filesAbortController?.signal === requestSignal;
+        if (!append && isCurrentRequest) {
+          this._filesAbortController = null;
+        }
+        if (isCurrentRequest) {
+          this.loading = false;
+          this.loadingMore = false;
+          this.queueViewportFillCheck();
+        }
       }
     },
 
@@ -1450,22 +1463,6 @@ function cloudvault() {
       input.click();
     },
 
-    normalizeRelativePath(relativePath, fallbackName = '') {
-      const raw = typeof relativePath === 'string' ? relativePath.trim().replace(/\\/g, '/') : '';
-      const parts = raw.split('/').map(part => part.trim()).filter(Boolean);
-      const safeParts = parts.filter(part => part !== '.' && part !== '..');
-      if (safeParts.length > 0) return safeParts.join('/');
-      return fallbackName || 'untitled';
-    },
-
-    resolveFolderUploadTarget(relativePath) {
-      const normalizedPath = this.normalizeRelativePath(relativePath);
-      const parts = normalizedPath.split('/').filter(Boolean);
-      const folderSuffix = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
-      if (!folderSuffix) return this.currentFolder;
-      return this.currentFolder === 'root' ? folderSuffix : this.currentFolder + '/' + folderSuffix;
-    },
-
     buildDirectUploadEntries(files) {
       return Array.from(files || [])
         .filter(file => file instanceof File)
@@ -1476,26 +1473,13 @@ function cloudvault() {
         }));
     },
 
-    buildFolderUploadEntries(files) {
-      return Array.from(files || [])
-        .filter(file => file instanceof File)
-        .map(file => {
-          const relativePath = this.normalizeRelativePath(file.webkitRelativePath || file.name, file.name);
-          return {
-            file,
-            folder: this.resolveFolderUploadTarget(relativePath),
-            relativePath,
-          };
-        });
-    },
-
-    buildRestoreEntries(files, useRelativePath = false) {
+    buildRestoreEntries(files) {
       return Array.from(files || [])
         .filter(file => file instanceof File)
         .map(file => ({
           file,
           folder: null,
-          relativePath: this.normalizeRelativePath(useRelativePath ? (file.webkitRelativePath || file.name) : file.name, file.name),
+          relativePath: file.name,
         }));
     },
 
@@ -1524,94 +1508,12 @@ function cloudvault() {
       }
     },
 
-    async readDirectoryHandle(directoryHandle, basePath) {
-      const entries = [];
-      for await (const handle of directoryHandle.values()) {
-        if (handle.kind === 'file') {
-          const file = await handle.getFile();
-          entries.push({
-            file,
-            relativePath: this.normalizeRelativePath(basePath ? basePath + '/' + handle.name : handle.name, file.name),
-          });
-          continue;
-        }
-
-        if (handle.kind === 'directory') {
-          const nextPath = basePath ? basePath + '/' + handle.name : handle.name;
-          const nestedEntries = await this.readDirectoryHandle(handle, nextPath);
-          entries.push(...nestedEntries);
-        }
-      }
-      return entries;
-    },
-
-    async pickDirectoryEntries() {
-      if (typeof window.showDirectoryPicker !== 'function') {
-        return null;
-      }
-
-      try {
-        const directoryHandle = await window.showDirectoryPicker({ mode: 'read' });
-        return await this.readDirectoryHandle(directoryHandle, directoryHandle.name);
-      } catch (error) {
-        if (error?.name === 'AbortError') {
-          return [];
-        }
-        this.showToast('读取文件夹失败，请稍后重试', 'error');
-        return [];
-      }
-    },
-
     triggerFilePicker() {
       this.clickHiddenInput('fileUploadInput');
     },
 
-    async triggerFolderPicker() {
-      if (typeof window.showDirectoryPicker !== 'function') {
-        this.clickHiddenInput('folderUploadInput');
-        return;
-      }
-
-      const directoryEntries = await this.pickDirectoryEntries();
-      if (Array.isArray(directoryEntries)) {
-        if (directoryEntries.length > 0) {
-          await this.queueUploadEntries(directoryEntries.map(entry => ({
-            file: entry.file,
-            folder: this.resolveFolderUploadTarget(entry.relativePath),
-            relativePath: entry.relativePath,
-          })));
-        }
-        if (directoryEntries.length === 0) {
-          return;
-        }
-        return;
-      }
-    },
-
     triggerRestoreFilePicker() {
       this.clickHiddenInput('restoreFileInput');
-    },
-
-    async triggerRestoreFolderPicker() {
-      if (typeof window.showDirectoryPicker !== 'function') {
-        this.clickHiddenInput('restoreFolderInput');
-        return;
-      }
-
-      const directoryEntries = await this.pickDirectoryEntries();
-      if (Array.isArray(directoryEntries)) {
-        if (directoryEntries.length > 0) {
-          await this.restoreUploadEntries(directoryEntries.map(entry => ({
-            file: entry.file,
-            folder: null,
-            relativePath: entry.relativePath,
-          })));
-        }
-        if (directoryEntries.length === 0) {
-          return;
-        }
-        return;
-      }
     },
 
     async handleFileSelect(event) {
@@ -1620,40 +1522,42 @@ function cloudvault() {
       event.target.value = '';
     },
 
-    async handleFolderSelect(event) {
-      const files = Array.from(event?.target?.files || []);
-      await this.queueUploadEntries(this.buildFolderUploadEntries(files));
-      event.target.value = '';
-    },
-
     async handleRestoreFileSelect(event) {
       const files = Array.from(event?.target?.files || []);
-      await this.restoreUploadEntries(this.buildRestoreEntries(files, false));
+      await this.restoreUploadEntries(this.buildRestoreEntries(files));
       event.target.value = '';
     },
 
-    async handleRestoreFolderSelect(event) {
-      const files = Array.from(event?.target?.files || []);
-      await this.restoreUploadEntries(this.buildRestoreEntries(files, true));
-      event.target.value = '';
+    getDroppedFiles(dataTransfer) {
+      const files = [];
+      let ignoredDirectory = false;
+      const items = Array.from(dataTransfer?.items || []);
+
+      if (items.length > 0) {
+        for (const item of items) {
+          const entry = typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null;
+          if (entry?.isDirectory) {
+            ignoredDirectory = true;
+            continue;
+          }
+          const file = typeof item.getAsFile === 'function' ? item.getAsFile() : null;
+          if (file instanceof File) files.push(file);
+        }
+      } else {
+        files.push(...Array.from(dataTransfer?.files || []).filter(file => file instanceof File));
+      }
+
+      return { files, ignoredDirectory };
     },
 
     async handleDrop(event) {
       this.showDropZone = false;
-      const entries = await window.readDroppedEntries(event.dataTransfer);
-      if (entries.length === 0) return;
-
-      const uploadEntries = entries.map(({ file, relativePath }) => {
-        const normalizedPath = this.normalizeRelativePath(relativePath || file?.name || '', file?.name || 'untitled');
-        const hasFolderContext = normalizedPath.includes('/');
-        return {
-          file,
-          folder: hasFolderContext ? this.resolveFolderUploadTarget(normalizedPath) : this.currentFolder,
-          relativePath: hasFolderContext ? normalizedPath : (file?.name || normalizedPath),
-        };
-      });
-
-      await this.queueUploadEntries(uploadEntries);
+      const { files, ignoredDirectory } = this.getDroppedFiles(event.dataTransfer);
+      if (ignoredDirectory) {
+        this.showToast('文件夹上传已移除，请改用文件上传', 'info');
+      }
+      if (files.length === 0) return;
+      await this.queueUploadEntries(this.buildDirectUploadEntries(files));
     },
 
     toggleDarkMode() {

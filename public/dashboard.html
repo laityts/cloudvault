@@ -118,11 +118,6 @@
                 <span class="hidden sm:inline">上传</span>
               </button>
 
-              <button @click="triggerFolderPicker()" class="btn-secondary text-xs flex items-center gap-1" type="button">
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
-                <span class="hidden sm:inline">文件夹</span>
-              </button>
-
               <div class="relative category-menu" @click.outside="categoryMenuOpen = false">
                 <button
                   type="button"
@@ -200,7 +195,7 @@
         <div x-show="!loading && currentSubfolders.length === 0 && filteredFiles.length === 0" class="empty-state">
           <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color:var(--text-muted)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/></svg>
           <p class="text-lg font-medium mb-1">暂无文件</p>
-          <p class="text-sm">拖放文件或文件夹至此处，或使用顶部工具栏开始上传</p>
+          <p class="text-sm">拖放文件至此处，或使用顶部工具栏开始上传</p>
         </div>
 
         <!-- 网格视图 -->
@@ -348,7 +343,7 @@
   <div class="dropzone" :class="{'active': showDropZone}" @drop.prevent="handleDrop($event)" @dragover.prevent @dragleave.prevent="showDropZone = false">
     <div class="text-center">
       <svg class="w-16 h-16 mx-auto mb-4 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
-      <p class="text-xl font-semibold text-accent-400">拖放文件或文件夹以上传</p>
+      <p class="text-xl font-semibold text-accent-400">拖放文件以上传</p>
       <p class="text-sm mt-1" style="color:var(--text-muted)" x-text="'到 ' + (currentFolder === 'root' ? '首页' : currentFolder)"></p>
     </div>
   </div>
@@ -681,13 +676,11 @@
   <div class="toast-container" id="toast-container"></div>
 
   <input x-ref="fileUploadInput" type="file" multiple class="sr-only" tabindex="-1" @change="handleFileSelect($event)">
-  <input x-ref="folderUploadInput" type="file" multiple webkitdirectory directory mozdirectory class="sr-only" tabindex="-1" @change="handleFolderSelect($event)">
   <input x-ref="restoreFileInput" type="file" multiple class="sr-only" tabindex="-1" @change="handleRestoreFileSelect($event)">
-  <input x-ref="restoreFolderInput" type="file" multiple webkitdirectory directory mozdirectory class="sr-only" tabindex="-1" @change="handleRestoreFolderSelect($event)">
 
   <!-- 上传任务模态框 -->
-  <div x-show="showUploadsModal" x-transition class="modal-backdrop" @click.self="showUploadsModal = false">
-    <div class="modal-content upload-modal-panel" style="max-width: 920px; width: min(94vw, 920px);">
+  <div x-show="showUploadsModal" x-transition class="modal-backdrop upload-modal-backdrop" @click.self="showUploadsModal = false">
+    <div class="modal-content upload-modal-panel">
       <div class="upload-modal-header">
         <div>
           <p class="upload-modal-kicker">上传任务</p>
@@ -705,20 +698,12 @@
             <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
             <span>上传文件</span>
           </button>
-          <button @click="triggerFolderPicker()" class="btn-secondary text-xs flex items-center gap-1" type="button">
-            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
-            <span>上传文件夹</span>
-          </button>
           <button x-show="anyNeedsFile" @click="triggerRestoreFilePicker()" class="btn-secondary text-xs flex items-center gap-1" type="button">
             <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.5 12.75l6 6 9-13.5"/></svg>
             <span>补选文件</span>
           </button>
-          <button x-show="uploadNeedsFolderRestore" @click="triggerRestoreFolderPicker()" class="btn-secondary text-xs flex items-center gap-1" type="button">
-            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7.5A2.25 2.25 0 015.25 5.25h4.379a1.5 1.5 0 011.06.44l1.12 1.12a1.5 1.5 0 001.06.44h5.88A2.25 2.25 0 0121 9.5v9.25A2.25 2.25 0 0118.75 21H5.25A2.25 2.25 0 013 18.75V7.5Z"/></svg>
-            <span>补选文件夹</span>
-          </button>
         </div>
-        <p class="upload-modal-toolbar-note" x-show="anyNeedsFile">缺少本地文件的任务会按原路径自动匹配，并从已完成分片继续。</p>
+        <p class="upload-modal-toolbar-note" x-show="anyNeedsFile">缺少本地文件的任务会优先按原记录匹配，匹配不到时再按同名同大小文件恢复。</p>
       </div>
 
       <div class="upload-modal-summary">
@@ -735,7 +720,7 @@
         <template x-if="allUploads.length === 0">
           <div class="upload-empty-state">
             <p class="text-base font-medium">暂无上传任务</p>
-            <p class="text-sm" style="color:var(--text-muted)">选择文件或文件夹后，这里会显示每个任务的进度。</p>
+            <p class="text-sm" style="color:var(--text-muted)">选择文件后，这里会显示每个任务的进度。</p>
           </div>
         </template>
         <template x-for="upload in allUploads" :key="upload.id">

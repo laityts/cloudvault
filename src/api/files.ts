@@ -9,6 +9,12 @@ type MultipartPart = {
   etag: string;
 };
 
+type UploadConflictResult = {
+  exists: boolean;
+  reason?: string;
+  file?: Partial<FileMeta> | null;
+};
+
 function safeDecodeHeaderValue(value: string | null, fallback: string): string {
   if (typeof value !== 'string' || value.length === 0) return fallback;
   try {
@@ -152,6 +158,82 @@ async function getFileById(env: Env, id: string): Promise<FileMeta | null> {
   };
 }
 
+async function findExistingUploadedFileByKey(env: Env, key: string): Promise<Partial<FileMeta> | null> {
+  const row = await env.DB.prepare(
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt,
+            share_token as shareToken, downloads
+     FROM files
+     WHERE key = ?
+       AND (upload_status = 'done' OR upload_status IS NULL)
+     ORDER BY uploaded_at DESC
+     LIMIT 1`
+  ).bind(key).first<{
+    id: string;
+    key: string;
+    name: string;
+    size: number;
+    type: string;
+    folder: string;
+    uploadedAt: string;
+    shareToken: string | null;
+    downloads: number;
+  }>();
+
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    key: row.key,
+    name: row.name,
+    size: row.size,
+    type: row.type,
+    folder: row.folder,
+    uploadedAt: row.uploadedAt,
+    shareToken: row.shareToken,
+    downloads: row.downloads,
+  };
+}
+
+async function checkUploadConflict(
+  env: Env,
+  uploadMeta: { fileName: string; folder: string; contentType: string; key: string }
+): Promise<UploadConflictResult> {
+  const existingFile = await findExistingUploadedFileByKey(env, uploadMeta.key);
+  if (existingFile) {
+    return {
+      exists: true,
+      reason: '目标目录已存在同名文件，已跳过上传',
+      file: existingFile,
+    };
+  }
+
+  const existingObject = await env.VAULT_BUCKET.head(uploadMeta.key);
+  if (existingObject) {
+    return {
+      exists: true,
+      reason: '目标目录已存在同名文件，已跳过上传',
+      file: {
+        key: uploadMeta.key,
+        name: uploadMeta.fileName,
+        folder: uploadMeta.folder,
+        size: existingObject.size,
+        type: existingObject.httpMetadata?.contentType || uploadMeta.contentType,
+      },
+    };
+  }
+
+  return { exists: false };
+}
+
+function uploadConflictResponse(conflict: UploadConflictResult): Response {
+  return json({
+    skipped: true,
+    exists: true,
+    reason: conflict.reason || '目标目录已存在同名文件，已跳过上传',
+    file: conflict.file || null,
+  }, 409);
+}
+
 async function updateStatsCounters(env: Env, sizeDelta: number, countDelta: number): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO stats (id, total_files, total_size) VALUES (1, ?, ?)
@@ -163,6 +245,9 @@ export async function upload(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const action = url.searchParams.get('action');
 
+  if (action === 'check') {
+    return handleUploadCheck(request, env);
+  }
   if (action === 'mpu-status') {
     return handleMultipartStatus(env, url);
   }
@@ -185,12 +270,28 @@ export async function upload(request: Request, env: Env): Promise<Response> {
   return handleDirectUpload(request, env);
 }
 
+async function handleUploadCheck(request: Request, env: Env): Promise<Response> {
+  const uploadMeta = parseUploadRequestMeta(request);
+  if (!uploadMeta) return error('Invalid upload target', 400);
+
+  const conflict = await checkUploadConflict(env, uploadMeta);
+  return json({
+    exists: conflict.exists,
+    skipped: conflict.exists,
+    reason: conflict.reason || '',
+    file: conflict.file || null,
+  });
+}
+
 async function handleDirectUpload(request: Request, env: Env): Promise<Response> {
   const uploadMeta = parseUploadRequestMeta(request);
   if (!uploadMeta) return error('Invalid upload target', 400);
   if (!request.body) return error('Upload body required', 400);
 
   const { fileName, folder, contentType, key } = uploadMeta;
+  const conflict = await checkUploadConflict(env, uploadMeta);
+  if (conflict.exists) return uploadConflictResponse(conflict);
+
   const id = crypto.randomUUID();
 
   const r2Object = await env.VAULT_BUCKET.put(key, request.body, {
@@ -257,6 +358,9 @@ async function handleMultipartCreate(request: Request, env: Env): Promise<Respon
   const { fileName, folder, contentType, key } = uploadMeta;
   const fileSize = parseInt(request.headers.get('X-File-Size') || '0', 10);
   if (!Number.isFinite(fileSize) || fileSize < 0) return error('Invalid file size', 400);
+
+  const conflict = await checkUploadConflict(env, uploadMeta);
+  if (conflict.exists) return uploadConflictResponse(conflict);
 
   const multipart = await env.VAULT_BUCKET.createMultipartUpload(key, {
     httpMetadata: { contentType, contentDisposition: 'attachment; filename="' + fileName + '"' },
@@ -494,10 +598,20 @@ async function handleMultipartProgress(request: Request, env: Env): Promise<Resp
 
 export async function list(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const folderFilter = url.searchParams.get('folder');
-  const searchFilter = url.searchParams.get('search')?.toLowerCase();
-  const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);
-  const offset = parseInt(url.searchParams.get('offset') || '0');
+  const rawFolderFilter = url.searchParams.get('folder');
+  const folderFilter = typeof rawFolderFilter === 'string' && rawFolderFilter.trim()
+    ? normalizeFolderPath(rawFolderFilter)
+    : null;
+  const rawSearchFilter = url.searchParams.get('search');
+  const searchFilter = typeof rawSearchFilter === 'string' ? rawSearchFilter.trim().toLowerCase() : '';
+  const parsedLimit = Number.parseInt(url.searchParams.get('limit') || '50', 10);
+  const parsedOffset = Number.parseInt(url.searchParams.get('offset') || '0', 10);
+  const limit = Number.isInteger(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 200) : 50;
+  const offset = Number.isInteger(parsedOffset) ? Math.max(parsedOffset, 0) : 0;
+
+  if (typeof rawFolderFilter === 'string' && rawFolderFilter.trim() && !folderFilter) {
+    return error('Invalid folder path', 400);
+  }
 
   let query = `
     SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, 
@@ -507,7 +621,7 @@ export async function list(request: Request, env: Env): Promise<Response> {
   `;
   const params: any[] = [];
 
-  if (folderFilter) {
+  if (folderFilter && folderFilter !== 'root') {
     query += ` AND folder = ?`;
     params.push(folderFilter);
   } else if (!searchFilter) {
@@ -518,35 +632,21 @@ export async function list(request: Request, env: Env): Promise<Response> {
     params.push(`%${searchFilter}%`);
   }
   query += ` ORDER BY uploaded_at DESC LIMIT ? OFFSET ?`;
-  params.push(limit, offset);
+  params.push(limit + 1, offset);
 
   const rows = await env.DB.prepare(query).bind(...params).all();
-  const files = rows.results.map(r => ({
+  const normalizedRows = Array.isArray(rows.results) ? rows.results : [];
+  const hasMore = normalizedRows.length > limit;
+  const visibleRows = hasMore ? normalizedRows.slice(0, limit) : normalizedRows;
+  const files = visibleRows.map(r => ({
     id: r.id, key: r.key, name: r.name, size: r.size, type: r.type, folder: r.folder,
     uploadedAt: r.uploadedAt, shareToken: r.shareToken, downloads: r.downloads,
   }));
 
-  let countQuery = `
-    SELECT COUNT(*) as total FROM files 
-    WHERE (upload_status = 'done' OR upload_status IS NULL)
-  `;
-  const countParams: any[] = [];
-  if (folderFilter) {
-    countQuery += ` AND folder = ?`;
-    countParams.push(folderFilter);
-  } else if (!searchFilter) {
-    countQuery += ` AND folder = 'root'`;
-  }
-  if (searchFilter) {
-    countQuery += ` AND LOWER(name) LIKE ?`;
-    countParams.push(`%${searchFilter}%`);
-  }
-  const countResult = await env.DB.prepare(countQuery).bind(...countParams).first<{ total: number }>();
-
   return json({
     files,
-    hasMore: offset + files.length < (countResult?.total || 0),
-    total: countResult?.total || 0,
+    hasMore,
+    total: hasMore ? null : offset + files.length,
   });
 }
 

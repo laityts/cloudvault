@@ -313,6 +313,105 @@ class UploadManager {
     }
   }
 
+  getUploadHeaders(item, includeSize = false) {
+    const headers = {
+      'X-File-Name': encodeURIComponent(item.name),
+      'X-Folder': encodeURIComponent(item.folder || 'root'),
+      'Content-Type': item.type || 'application/octet-stream',
+    };
+
+    if (includeSize) {
+      headers['X-File-Size'] = String(item.size);
+    }
+
+    return headers;
+  }
+
+  parseJsonText(text) {
+    if (typeof text !== 'string' || !text.trim()) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+
+  getResponseMessage(payload, fallbackMessage) {
+    if (typeof payload?.reason === 'string' && payload.reason.trim()) {
+      return payload.reason.trim();
+    }
+    if (typeof payload?.error === 'string' && payload.error.trim()) {
+      return payload.error.trim();
+    }
+    if (typeof payload?.message === 'string' && payload.message.trim()) {
+      return payload.message.trim();
+    }
+    return fallbackMessage;
+  }
+
+  createSkippedUploadError(payload, fallbackMessage = '目标目录已存在同名文件，已跳过上传') {
+    const error = new Error(this.getResponseMessage(payload, fallbackMessage));
+    error.skipUpload = true;
+    error.payload = payload || null;
+    return error;
+  }
+
+  async readResponsePayload(response) {
+    const contentType = response.headers.get('Content-Type') || '';
+    if (contentType.includes('application/json')) {
+      try {
+        return await response.json();
+      } catch {
+        return null;
+      }
+    }
+
+    try {
+      const text = await response.text();
+      return this.parseJsonText(text) || { error: text };
+    } catch {
+      return null;
+    }
+  }
+
+  async ensureUploadAllowed(item) {
+    const response = await fetch('/api/files/upload?action=check', {
+      method: 'POST',
+      headers: this.getUploadHeaders(item, true),
+      credentials: 'same-origin',
+      signal: item.controller?.signal,
+    });
+
+    const payload = await this.readResponsePayload(response);
+    if (!response.ok) {
+      throw new Error(this.getResponseMessage(payload, '上传预检查失败'));
+    }
+
+    return payload?.exists === true ? payload : null;
+  }
+
+  async removeUploadItem(item, { abortRemote = false } = {}) {
+    if (!item || typeof item.id !== 'string') return;
+
+    if (abortRemote && item.uploadId && item.key) {
+      try {
+        let url = `/api/files/upload?action=mpu-abort&uploadId=${encodeURIComponent(item.uploadId)}&key=${encodeURIComponent(item.key)}`;
+        if (item.fileId) {
+          url += `&fileId=${encodeURIComponent(item.fileId)}`;
+        }
+        await fetch(url, {
+          method: 'DELETE',
+          credentials: 'same-origin',
+        });
+      } catch (error) {
+        console.error('Failed to abort multipart upload', error);
+      }
+    }
+
+    this.queue = this.queue.filter(entry => entry.id !== item.id);
+    await deleteUpload(item.id);
+  }
+
   findDuplicateTask(candidate) {
     return this.queue.find(item =>
       item.status !== 'done' &&
@@ -323,6 +422,36 @@ class UploadManager {
         strictLastModified: true,
       })
     );
+  }
+
+  findRelinkTask(candidate, matchedTaskIds) {
+    const findTask = (requireRelativePath) => this.queue.find(item =>
+      item.status === 'needs_file' &&
+      !matchedTaskIds.has(item.id) &&
+      this.matchesUploadCandidate(item, candidate, {
+        requireFolder: false,
+        requireRelativePath,
+        strictLastModified: true,
+      })
+    );
+
+    const strictMatch = findTask(true);
+    if (strictMatch) {
+      return {
+        task: strictMatch,
+        preferredRelativePath: candidate.relativePath,
+      };
+    }
+
+    const fallbackMatch = findTask(false);
+    if (fallbackMatch) {
+      return {
+        task: fallbackMatch,
+        preferredRelativePath: null,
+      };
+    }
+
+    return null;
   }
 
   validateFile(file) {
@@ -450,29 +579,20 @@ class UploadManager {
         continue;
       }
 
-      const task = this.queue.find(item =>
-        item.status === 'needs_file' &&
-        !matchedTaskIds.has(item.id) &&
-        this.matchesUploadCandidate(item, candidate, {
-          requireFolder: false,
-          requireRelativePath: true,
-          strictLastModified: true,
-        })
-      );
-
-      if (!task) {
+      const matchedTask = this.findRelinkTask(candidate, matchedTaskIds);
+      if (!matchedTask?.task) {
         summary.unmatched++;
         continue;
       }
 
-      const attachResult = await this.attachFileToUpload(task.id, candidate.file, {
+      const attachResult = await this.attachFileToUpload(matchedTask.task.id, candidate.file, {
         silentSuccess: true,
-        preferredRelativePath: candidate.relativePath,
+        preferredRelativePath: matchedTask.preferredRelativePath || undefined,
         strictLastModified: true,
       });
 
       if (attachResult?.ok) {
-        matchedTaskIds.add(task.id);
+        matchedTaskIds.add(matchedTask.task.id);
         summary.attached++;
       } else {
         summary.failed++;
@@ -543,6 +663,11 @@ class UploadManager {
     item.lastLoaded = item.uploadedBytes || 0;
 
     try {
+      const conflict = await this.ensureUploadAllowed(item);
+      if (conflict) {
+        throw this.createSkippedUploadError(conflict);
+      }
+
       if (item.size < SMALL_FILE_THRESHOLD) {
         item.uploadedBytes = 0;
         item.progress = 0;
@@ -576,6 +701,20 @@ class UploadManager {
         item.eta = 0;
         await this.saveToStorage(item);
         this.dispatch('upload-paused', { name: item.name });
+        this.dispatch('upload-queue-changed');
+        return;
+      }
+
+      if (error?.skipUpload) {
+        item.controller = null;
+        item.xhr = null;
+        item.speed = 0;
+        item.eta = 0;
+        await this.removeUploadItem(item, { abortRemote: Boolean(item.uploadId && item.key) });
+        this.dispatch('upload-skipped', {
+          name: item.name,
+          reason: error.message || '目标目录已存在同名文件，已跳过上传',
+        });
         this.dispatch('upload-queue-changed');
         return;
       }
@@ -634,7 +773,12 @@ class UploadManager {
             resolve({});
           }
         } else {
-          reject(new Error(xhr.responseText || '上传失败'));
+          const payload = this.parseJsonText(xhr.responseText);
+          if (xhr.status === 409 && (payload?.skipped === true || payload?.exists === true)) {
+            reject(this.createSkippedUploadError(payload));
+            return;
+          }
+          reject(new Error(this.getResponseMessage(payload, xhr.responseText || '上传失败')));
         }
       };
 
@@ -649,9 +793,10 @@ class UploadManager {
       }, { once: true });
 
       xhr.open('POST', '/api/files/upload');
-      xhr.setRequestHeader('X-File-Name', encodeURIComponent(item.name));
-      xhr.setRequestHeader('X-Folder', encodeURIComponent(item.folder || 'root'));
-      xhr.setRequestHeader('Content-Type', item.type || 'application/octet-stream');
+      const headers = this.getUploadHeaders(item);
+      for (const [header, value] of Object.entries(headers)) {
+        xhr.setRequestHeader(header, value);
+      }
       xhr.withCredentials = true;
       xhr.send(item.file);
     });
@@ -660,21 +805,19 @@ class UploadManager {
   async createMultipartSession(item) {
     const response = await fetch('/api/files/upload?action=mpu-create', {
       method: 'POST',
-      headers: {
-        'X-File-Name': encodeURIComponent(item.name),
-        'X-Folder': encodeURIComponent(item.folder || 'root'),
-        'Content-Type': item.type || 'application/octet-stream',
-        'X-File-Size': String(item.size),
-      },
+      headers: this.getUploadHeaders(item, true),
       credentials: 'same-origin',
       signal: item.controller.signal,
     });
 
+    const data = await this.readResponsePayload(response);
     if (!response.ok) {
-      throw new Error('初始化分片上传失败');
+      if (response.status === 409 && (data?.skipped === true || data?.exists === true)) {
+        throw this.createSkippedUploadError(data);
+      }
+      throw new Error(this.getResponseMessage(data, '初始化分片上传失败'));
     }
 
-    const data = await response.json();
     if (!data?.uploadId || !data?.key || !data?.fileId) {
       throw new Error('分片上传会话响应无效');
     }
@@ -989,23 +1132,7 @@ class UploadManager {
       item.controller?.abort();
     }
 
-    if (item.uploadId && item.key) {
-      try {
-        let url = `/api/files/upload?action=mpu-abort&uploadId=${encodeURIComponent(item.uploadId)}&key=${encodeURIComponent(item.key)}`;
-        if (item.fileId) {
-          url += `&fileId=${encodeURIComponent(item.fileId)}`;
-        }
-        await fetch(url, {
-          method: 'DELETE',
-          credentials: 'same-origin',
-        });
-      } catch (error) {
-        console.error('Failed to abort multipart upload', error);
-      }
-    }
-
-    this.queue = this.queue.filter(entry => entry.id !== id);
-    await deleteUpload(id);
+    await this.removeUploadItem(item, { abortRemote: Boolean(item.uploadId && item.key) });
     this.dispatch('upload-queue-changed');
   }
 
@@ -1078,62 +1205,3 @@ class UploadManager {
 }
 
 window.UploadManager = new UploadManager();
-
-window.readDroppedEntries = async function(dataTransfer) {
-  const files = [];
-  const items = dataTransfer?.items;
-
-  if (items && items[0] && items[0].webkitGetAsEntry) {
-    const entries = [];
-    for (let index = 0; index < items.length; index++) {
-      const entry = items[index].webkitGetAsEntry();
-      if (entry) entries.push(entry);
-    }
-    for (const entry of entries) {
-      await readEntry(entry, '', files);
-    }
-  } else {
-    for (const file of Array.from(dataTransfer?.files || [])) {
-      files.push({ file, relativePath: '' });
-    }
-  }
-
-  return files;
-};
-
-function readEntry(entry, path, files) {
-  return new Promise(resolve => {
-    if (entry.isFile) {
-      entry.file(file => {
-        const relativePath = path ? path + '/' + file.name : file.name;
-        files.push({ file, relativePath });
-        resolve();
-      });
-    } else if (entry.isDirectory) {
-      const reader = entry.createReader();
-      const nextPath = path ? path + '/' + entry.name : entry.name;
-
-      // WebKit 每次只会返回一批目录项，这里循环直到读空，避免大目录漏文件。
-      const readBatch = async () => {
-        const entries = await new Promise(batchResolve => {
-          reader.readEntries(batchResolve, () => batchResolve([]));
-        });
-
-        if (!Array.isArray(entries) || entries.length === 0) {
-          resolve();
-          return;
-        }
-
-        for (const currentEntry of entries) {
-          await readEntry(currentEntry, nextPath, files);
-        }
-
-        await readBatch();
-      };
-
-      void readBatch();
-    } else {
-      resolve();
-    }
-  });
-}
