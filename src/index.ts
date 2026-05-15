@@ -31,7 +31,15 @@ export default {
               headers: { 'WWW-Authenticate': 'Basic realm="CloudVault WebDAV"' },
             });
           }
-          const decoded = atob(authHeader.slice(6));
+          let decoded: string;
+          try {
+            decoded = atob(authHeader.slice(6));
+          } catch {
+            return new Response('Unauthorized', {
+              status: 401,
+              headers: { 'WWW-Authenticate': 'Basic realm="CloudVault WebDAV"' },
+            });
+          }
           const colonIdx = decoded.indexOf(':');
           const inputPassword = colonIdx >= 0 ? decoded.slice(colonIdx + 1) : decoded;
           const encoder = new TextEncoder();

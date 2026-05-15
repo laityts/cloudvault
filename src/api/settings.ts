@@ -118,7 +118,37 @@ async function deleteAllBucketObjects(env: Env): Promise<number> {
   return deletedObjects;
 }
 
+async function abortIncompleteMultipartUploads(env: Env): Promise<void> {
+  const rows = await env.DB.prepare(
+    `SELECT key, upload_id as uploadId
+     FROM files
+     WHERE upload_status IS NOT NULL
+       AND upload_status != 'done'
+       AND upload_id IS NOT NULL`
+  ).all<{ key: string; uploadId: string | null }>();
+
+  const uploads = Array.isArray(rows.results)
+    ? rows.results
+        .map(row => ({
+          key: typeof row.key === 'string' ? row.key : '',
+          uploadId: typeof row.uploadId === 'string' && row.uploadId ? row.uploadId : null,
+        }))
+        .filter(row => row.key && row.uploadId && !row.key.includes('\\') && !row.key.includes('..'))
+    : [];
+
+  // 清空全部数据前先中止未完成分片上传，否则 R2 侧会残留不可见但未结束的 multipart 状态。
+  await Promise.all(uploads.map(async upload => {
+    try {
+      const multipart = env.VAULT_BUCKET.resumeMultipartUpload(upload.key, upload.uploadId as string);
+      await multipart.abort();
+    } catch {
+      // 允许继续删库，避免异常 multipart 状态把重置流程卡死。
+    }
+  }));
+}
+
 export async function handleResetAllData(_request: Request, env: Env): Promise<Response> {
+  await abortIncompleteMultipartUploads(env);
   const deletedObjects = await deleteAllBucketObjects(env);
   const resetTables = [
     'files',

@@ -1,6 +1,8 @@
 import { Env, FileMeta } from '../utils/types';
-import { json, error } from '../utils/response';
+import { json, error, contentDispositionFilename } from '../utils/response';
 import { getSettings } from './settings';
+
+const MAX_SHARE_EXPIRES_IN_DAYS = 3650;
 
 function extractFileId(url: URL): string | null {
   const parts = url.pathname.split('/');
@@ -13,6 +15,46 @@ async function hashSharePassword(password: string): Promise<string> {
   const data = encoder.encode(password + ':cloudvault-share-salt');
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function readJsonBody<T>(request: Request): Promise<T | null> {
+  try {
+    const body = await request.json<unknown>();
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+    return body as T;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeFolderPath(folder: string): string | null {
+  const raw = (folder || '').trim();
+  if (!raw || raw === 'root') return null;
+  if (raw.startsWith('/') || raw.endsWith('/') || raw.includes('\\') || raw.includes('//')) return null;
+  const parts = raw.split('/').map(part => part.trim());
+  if (parts.some(part => !part || part === '.' || part === '..' || /[\x00-\x1F\x7F]/.test(part))) return null;
+  return parts.join('/');
+}
+
+function normalizeOptionalPassword(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value;
+}
+
+function getShareExpiresAt(value: unknown): string | null {
+  const days = Number(value);
+  if (!Number.isFinite(days) || days <= 0) return null;
+  const boundedDays = Math.min(days, MAX_SHARE_EXPIRES_IN_DAYS);
+  return new Date(Date.now() + boundedDays * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function extractFolderFromRoute(request: Request): string | null {
+  const url = new URL(request.url);
+  try {
+    return normalizeFolderPath(decodeURIComponent(url.pathname.split('/').slice(3).join('/')));
+  } catch {
+    return null;
+  }
 }
 
 export async function verifySharePassword(input: string, storedHash: string): Promise<boolean> {
@@ -87,31 +129,30 @@ async function getAllFiles(env: Env): Promise<FileMeta[]> {
 }
 
 export async function createShare(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{
-    fileId: string;
-    password?: string;
-    expiresInDays?: number;
-  }>();
+  const body = await readJsonBody<{
+    fileId?: unknown;
+    password?: unknown;
+    expiresInDays?: unknown;
+  }>(request);
 
-  if (!body.fileId) return error('fileId required', 400);
+  const fileId = typeof body?.fileId === 'string' ? body.fileId.trim() : '';
+  if (!fileId) return error('fileId required', 400);
 
-  const meta = await getFileById(env, body.fileId);
+  const meta = await getFileById(env, fileId);
   if (!meta) return error('File not found', 404);
 
   const token = crypto.randomUUID();
   let passwordHash: string | null = null;
-  if (body.password) {
-    passwordHash = await hashSharePassword(body.password);
+  const password = normalizeOptionalPassword(body?.password);
+  if (password) {
+    passwordHash = await hashSharePassword(password);
   }
 
-  let expiresAt: string | null = null;
-  if (body.expiresInDays && body.expiresInDays > 0) {
-    expiresAt = new Date(Date.now() + body.expiresInDays * 24 * 60 * 60 * 1000).toISOString();
-  }
+  const expiresAt = getShareExpiresAt(body?.expiresInDays);
 
   await env.DB.prepare(
     `UPDATE files SET share_token = ?, share_password = ?, share_expires_at = ? WHERE id = ?`
-  ).bind(token, passwordHash, expiresAt, body.fileId).run();
+  ).bind(token, passwordHash, expiresAt, fileId).run();
 
   return json({
     token,
@@ -154,10 +195,10 @@ export async function getShareInfo(request: Request, env: Env): Promise<Response
 }
 
 export async function shareFolderToggle(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ folder: string }>();
-  if (!body.folder?.trim()) return error('Folder name required', 400);
+  const body = await readJsonBody<{ folder?: unknown }>(request);
+  const folder = normalizeFolderPath(typeof body?.folder === 'string' ? body.folder : '');
+  if (!folder) return error('Invalid folder path', 400);
 
-  const folder = body.folder.trim();
   const existing = await env.DB.prepare(`SELECT folder FROM folder_shares WHERE folder = ?`).bind(folder).first();
 
   if (existing) {
@@ -177,10 +218,10 @@ export async function listSharedFolders(_request: Request, env: Env): Promise<Re
 }
 
 export async function toggleFolderExclude(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ folder: string }>();
-  if (!body.folder?.trim()) return error('Folder name required', 400);
+  const body = await readJsonBody<{ folder?: unknown }>(request);
+  const folder = normalizeFolderPath(typeof body?.folder === 'string' ? body.folder : '');
+  if (!folder) return error('Invalid folder path', 400);
 
-  const folder = body.folder.trim();
   const existing = await env.DB.prepare(`SELECT folder FROM folder_excludes WHERE folder = ?`).bind(folder).first();
 
   if (existing) {
@@ -195,14 +236,14 @@ export async function toggleFolderExclude(request: Request, env: Env): Promise<R
 }
 
 export async function createFolderShareLink(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{
-    folder: string;
-    password?: string;
-    expiresInDays?: number;
-  }>();
+  const body = await readJsonBody<{
+    folder?: unknown;
+    password?: unknown;
+    expiresInDays?: unknown;
+  }>(request);
 
-  if (!body.folder?.trim()) return error('Folder name required', 400);
-  const folder = body.folder.trim();
+  const folder = normalizeFolderPath(typeof body?.folder === 'string' ? body.folder : '');
+  if (!folder) return error('Invalid folder path', 400);
 
   const existing = await env.DB.prepare(`SELECT token FROM folder_share_meta WHERE folder = ?`).bind(folder).first<{ token: string }>();
   if (existing) {
@@ -212,14 +253,12 @@ export async function createFolderShareLink(request: Request, env: Env): Promise
 
   const token = crypto.randomUUID();
   let passwordHash: string | null = null;
-  if (body.password) {
-    passwordHash = await hashSharePassword(body.password);
+  const password = normalizeOptionalPassword(body?.password);
+  if (password) {
+    passwordHash = await hashSharePassword(password);
   }
 
-  let expiresAt: string | null = null;
-  if (body.expiresInDays && body.expiresInDays > 0) {
-    expiresAt = new Date(Date.now() + body.expiresInDays * 24 * 60 * 60 * 1000).toISOString();
-  }
+  const expiresAt = getShareExpiresAt(body?.expiresInDays);
 
   const linkData = { folder, passwordHash, expiresAt, createdAt: new Date().toISOString() };
 
@@ -240,9 +279,8 @@ export async function createFolderShareLink(request: Request, env: Env): Promise
 }
 
 export async function revokeFolderShareLink(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const folder = decodeURIComponent(url.pathname.split('/').slice(3).join('/'));
-  if (!folder) return error('Folder path required', 400);
+  const folder = extractFolderFromRoute(request);
+  if (!folder) return error('Invalid folder path', 400);
 
   const existing = await env.DB.prepare(`SELECT token FROM folder_share_meta WHERE folder = ?`).bind(folder).first<{ token: string }>();
   if (!existing) return error('No share link found for this folder', 404);
@@ -254,9 +292,8 @@ export async function revokeFolderShareLink(request: Request, env: Env): Promise
 }
 
 export async function getFolderShareLinkInfo(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const folder = decodeURIComponent(url.pathname.split('/').slice(3).join('/'));
-  if (!folder) return error('Folder path required', 400);
+  const folder = extractFolderFromRoute(request);
+  if (!folder) return error('Invalid folder path', 400);
 
   const meta = await env.DB.prepare(`SELECT token, password_hash, expires_at FROM folder_share_meta WHERE folder = ?`).bind(folder).first<{ token: string; password_hash: string | null; expires_at: string | null }>();
   if (!meta) return json({ token: null });
@@ -365,7 +402,9 @@ export async function listPublicShared(request: Request, env: Env): Promise<Resp
 
 export async function browsePublicFolder(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const path = url.searchParams.get('path') || '';
+  const rawPath = url.searchParams.get('path') || '';
+  const path = rawPath ? normalizeFolderPath(rawPath) : '';
+  if (rawPath && !path) return error('Invalid folder path', 400);
   const sharedFolders = await getSharedFolders(env);
   const excludedFolders = await getExcludedFolders(env);
 
@@ -473,7 +512,7 @@ export async function publicDownload(request: Request, env: Env): Promise<Respon
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
   headers.set('Cache-Control', 'public, max-age=14400, s-maxage=86400');
-  headers.set('Content-Disposition', 'attachment; filename="' + encodeURIComponent(meta.name) + '"');
+  headers.set('Content-Disposition', 'attachment; ' + contentDispositionFilename(meta.name));
   headers.set('Content-Length', String(object.size));
 
   return new Response(object.body, { headers });

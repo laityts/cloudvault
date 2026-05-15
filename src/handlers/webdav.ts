@@ -1,5 +1,5 @@
 import { Env, FileMeta } from '../utils/types';
-import { getMimeType } from '../utils/response';
+import { contentDispositionFilename, getMimeType } from '../utils/response';
 import { getAllowedUploadExtensionList, getSettings } from '../api/settings';
 import {
   multistatusResponse,
@@ -17,6 +17,13 @@ function parseDavPath(request: Request): string {
   const url = new URL(request.url);
   const raw = decodeURIComponent(url.pathname.slice(DAV_PREFIX.length));
   return raw.replace(/\/+$/, '');
+}
+
+function isSafeDavPath(davPath: string): boolean {
+  if (!davPath) return true;
+  if (davPath.includes('\\') || davPath.includes('//') || /[\x00-\x1F\x7F]/.test(davPath)) return false;
+  const parts = davPath.split('/');
+  return parts.every(part => part && part !== '.' && part !== '..');
 }
 
 function toFolder(davPath: string): string {
@@ -42,7 +49,11 @@ async function isUploadExtensionAllowed(env: Env, fileName: string): Promise<boo
 
 async function getAllFiles(env: Env): Promise<FileMeta[]> {
   const rows = await env.DB.prepare(
-    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files`
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads
+     FROM files
+     WHERE upload_status = 'done'
+        OR upload_status IS NULL
+        OR (upload_status = 'pending' AND upload_id IS NULL)`
   ).all();
   return rows.results.map(r => ({
     id: r.id, key: r.key, name: r.name, size: r.size, type: r.type, folder: r.folder,
@@ -71,7 +82,14 @@ async function findFileByDavPath(env: Env, davPath: string): Promise<FileMeta | 
   const folder = toFolder(davPath);
   const name = toFileName(davPath);
   const row = await env.DB.prepare(
-    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads FROM files WHERE folder = ? AND name = ?`
+    `SELECT id, key, name, size, type, folder, uploaded_at as uploadedAt, share_token as shareToken, share_password as sharePassword, share_expires_at as shareExpiresAt, downloads
+     FROM files
+     WHERE folder = ? AND name = ?
+       AND (
+         upload_status = 'done'
+         OR upload_status IS NULL
+         OR (upload_status = 'pending' AND upload_id IS NULL)
+       )`
   ).bind(folder, name).first<{
     id: string; key: string; name: string; size: number; type: string; folder: string;
     uploadedAt: string; shareToken: string | null; sharePassword: string | null;
@@ -103,17 +121,24 @@ async function ensureFolderChain(env: Env, folderPath: string): Promise<void> {
 
 export async function handleWebDav(request: Request, env: Env): Promise<Response> {
   const method = request.method;
+  let davPath = '';
+  try {
+    davPath = parseDavPath(request);
+  } catch {
+    return new Response('Invalid path', { status: 400 });
+  }
+  if (!isSafeDavPath(davPath)) return new Response('Invalid path', { status: 400 });
 
   switch (method) {
     case 'OPTIONS': return handleOptions();
-    case 'PROPFIND': return handlePropfind(request, env);
-    case 'GET': return handleGet(request, env);
-    case 'HEAD': return handleHead(request, env);
-    case 'PUT': return handlePut(request, env);
-    case 'DELETE': return handleDelete(request, env);
-    case 'MKCOL': return handleMkcol(request, env);
-    case 'MOVE': return handleMove(request, env);
-    case 'COPY': return handleCopy(request, env);
+    case 'PROPFIND': return handlePropfind(request, env, davPath);
+    case 'GET': return handleGet(request, env, davPath);
+    case 'HEAD': return handleHead(request, env, davPath);
+    case 'PUT': return handlePut(request, env, davPath);
+    case 'DELETE': return handleDelete(request, env, davPath);
+    case 'MKCOL': return handleMkcol(request, env, davPath);
+    case 'MOVE': return handleMove(request, env, davPath);
+    case 'COPY': return handleCopy(request, env, davPath);
     default:
       return new Response('Method Not Allowed', {
         status: 405,
@@ -133,8 +158,7 @@ function handleOptions(): Response {
   });
 }
 
-async function handlePropfind(request: Request, env: Env): Promise<Response> {
-  const davPath = parseDavPath(request);
+async function handlePropfind(request: Request, env: Env, davPath: string): Promise<Response> {
   const depth = request.headers.get('Depth') ?? '1';
 
   if (davPath === '') {
@@ -290,8 +314,7 @@ th{color:#888;font-size:13px}h1{font-size:18px;font-weight:500}</style></head>
   return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 
-async function handleGet(request: Request, env: Env): Promise<Response> {
-  const davPath = parseDavPath(request);
+async function handleGet(request: Request, env: Env, davPath: string): Promise<Response> {
   const folders = await getAllFolders(env);
   const allFiles = await getAllFiles(env);
   const isDir = isDirPath(davPath, folders, allFiles);
@@ -332,8 +355,7 @@ async function handleGet(request: Request, env: Env): Promise<Response> {
   return new Response(object.body, { headers });
 }
 
-async function handleHead(request: Request, env: Env): Promise<Response> {
-  const davPath = parseDavPath(request);
+async function handleHead(request: Request, env: Env, davPath: string): Promise<Response> {
   const folders = await getAllFolders(env);
   const allFiles = await getAllFiles(env);
 
@@ -377,10 +399,8 @@ async function handleHead(request: Request, env: Env): Promise<Response> {
   return new Response('Not Found', { status: 404 });
 }
 
-async function handlePut(request: Request, env: Env): Promise<Response> {
-  const davPath = parseDavPath(request);
+async function handlePut(request: Request, env: Env, davPath: string): Promise<Response> {
   if (!davPath) return new Response('Cannot PUT to root', { status: 405 });
-  if (davPath.includes('..')) return new Response('Invalid path', { status: 400 });
 
   const folder = toFolder(davPath);
   const fileName = toFileName(davPath);
@@ -400,7 +420,7 @@ async function handlePut(request: Request, env: Env): Promise<Response> {
     const r2Object = await env.VAULT_BUCKET.put(key, request.body, {
       httpMetadata: {
         contentType,
-        contentDisposition: 'attachment; filename="' + fileName + '"',
+        contentDisposition: 'attachment; ' + contentDispositionFilename(fileName),
       },
       customMetadata: { fileId: existingFile.id },
     });
@@ -408,7 +428,7 @@ async function handlePut(request: Request, env: Env): Promise<Response> {
 
     const sizeDelta = r2Object.size - existingFile.size;
     await env.DB.prepare(
-      `UPDATE files SET key = ?, size = ?, type = ?, uploaded_at = ? WHERE id = ?`
+      `UPDATE files SET key = ?, size = ?, type = ?, uploaded_at = ?, upload_status = 'done' WHERE id = ?`
     ).bind(key, r2Object.size, contentType, new Date().toISOString(), existingFile.id).run();
     if (sizeDelta !== 0) await updateStatsCounters(env, sizeDelta, 0);
 
@@ -423,7 +443,7 @@ async function handlePut(request: Request, env: Env): Promise<Response> {
   const r2Object = await env.VAULT_BUCKET.put(key, request.body, {
     httpMetadata: {
       contentType,
-      contentDisposition: 'attachment; filename="' + fileName + '"',
+      contentDisposition: 'attachment; ' + contentDispositionFilename(fileName),
     },
     customMetadata: { fileId: id },
   });
@@ -444,8 +464,8 @@ async function handlePut(request: Request, env: Env): Promise<Response> {
   };
 
   await env.DB.prepare(
-    `INSERT INTO files (id, key, name, size, type, folder, uploaded_at, share_token, share_password, share_expires_at, downloads)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO files (id, key, name, size, type, folder, uploaded_at, share_token, share_password, share_expires_at, downloads, upload_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'done')`
   ).bind(
     meta.id, meta.key, meta.name, meta.size, meta.type, meta.folder, meta.uploadedAt,
     meta.shareToken, meta.sharePassword, meta.shareExpiresAt, meta.downloads
@@ -455,8 +475,7 @@ async function handlePut(request: Request, env: Env): Promise<Response> {
   return new Response(null, { status: 201 });
 }
 
-async function handleDelete(request: Request, env: Env): Promise<Response> {
-  const davPath = parseDavPath(request);
+async function handleDelete(request: Request, env: Env, davPath: string): Promise<Response> {
   if (!davPath) return new Response('Cannot DELETE root', { status: 403 });
 
   const file = await findFileByDavPath(env, davPath);
@@ -512,8 +531,7 @@ async function handleDelete(request: Request, env: Env): Promise<Response> {
   return new Response(null, { status: 204 });
 }
 
-async function handleMkcol(request: Request, env: Env): Promise<Response> {
-  const davPath = parseDavPath(request);
+async function handleMkcol(request: Request, env: Env, davPath: string): Promise<Response> {
   if (!davPath) return new Response('Cannot MKCOL root', { status: 405 });
 
   const body = await request.text();
@@ -539,12 +557,12 @@ async function handleMkcol(request: Request, env: Env): Promise<Response> {
   return new Response('Created', { status: 201 });
 }
 
-async function handleMove(request: Request, env: Env): Promise<Response> {
-  const davPath = parseDavPath(request);
+async function handleMove(request: Request, env: Env, davPath: string): Promise<Response> {
   if (!davPath) return new Response('Cannot MOVE root', { status: 403 });
 
   const destination = parseDestination(request);
   if (!destination) return new Response('Bad Request', { status: 400 });
+  if (!isSafeDavPath(destination)) return new Response('Invalid destination', { status: 400 });
 
   const overwrite = request.headers.get('Overwrite') !== 'F';
 
@@ -575,7 +593,7 @@ async function handleMove(request: Request, env: Env): Promise<Response> {
     await env.VAULT_BUCKET.delete(file.key);
 
     await env.DB.prepare(
-      `UPDATE files SET key = ?, folder = ?, name = ? WHERE id = ?`
+      `UPDATE files SET key = ?, folder = ?, name = ?, upload_status = 'done' WHERE id = ?`
     ).bind(newKey, newFolder, newName, file.id).run();
 
     return new Response(null, { status: destFile ? 204 : 201 });
@@ -584,12 +602,12 @@ async function handleMove(request: Request, env: Env): Promise<Response> {
   return new Response('Not Found', { status: 404 });
 }
 
-async function handleCopy(request: Request, env: Env): Promise<Response> {
-  const davPath = parseDavPath(request);
+async function handleCopy(request: Request, env: Env, davPath: string): Promise<Response> {
   if (!davPath) return new Response('Cannot COPY root', { status: 403 });
 
   const destination = parseDestination(request);
   if (!destination) return new Response('Bad Request', { status: 400 });
+  if (!isSafeDavPath(destination)) return new Response('Invalid destination', { status: 400 });
 
   const overwrite = request.headers.get('Overwrite') !== 'F';
 
@@ -635,8 +653,8 @@ async function handleCopy(request: Request, env: Env): Promise<Response> {
   };
 
   await env.DB.prepare(
-    `INSERT INTO files (id, key, name, size, type, folder, uploaded_at, share_token, share_password, share_expires_at, downloads)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO files (id, key, name, size, type, folder, uploaded_at, share_token, share_password, share_expires_at, downloads, upload_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'done')`
   ).bind(
     meta.id, meta.key, meta.name, meta.size, meta.type, meta.folder, meta.uploadedAt,
     meta.shareToken, meta.sharePassword, meta.shareExpiresAt, meta.downloads
@@ -656,7 +674,12 @@ function parseDestination(request: Request): string | null {
     if (!decoded.startsWith(DAV_PREFIX)) return null;
     return decoded.slice(DAV_PREFIX.length).replace(/\/+$/, '');
   } catch {
-    const decoded = decodeURIComponent(dest);
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(dest);
+    } catch {
+      return null;
+    }
     if (!decoded.startsWith(DAV_PREFIX)) return null;
     return decoded.slice(DAV_PREFIX.length).replace(/\/+$/, '');
   }

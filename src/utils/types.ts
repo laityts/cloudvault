@@ -90,6 +90,7 @@ export interface MoveFilesRequest {
 
 export interface MoveFilesResponse {
   moved: number;
+  skipped: number;
 }
 
 export interface MoveFolderRequest {

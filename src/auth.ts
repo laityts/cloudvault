@@ -70,10 +70,16 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
 
   if (contentType.includes('application/x-www-form-urlencoded')) {
     const formData = await request.formData();
-    password = formData.get('password') as string || '';
+    const value = formData.get('password');
+    password = typeof value === 'string' ? value : '';
   } else if (contentType.includes('application/json')) {
-    const body = await request.json<{ password: string }>();
-    password = body.password || '';
+    let body: { password?: unknown };
+    try {
+      body = await request.json<{ password?: unknown }>();
+    } catch {
+      return error('Invalid login payload', 400);
+    }
+    password = typeof body.password === 'string' ? body.password : '';
   } else {
     return error('Unsupported content type', 415);
   }
@@ -121,6 +127,9 @@ export async function authMiddleware(request: Request, env: Env): Promise<Respon
   if (url.pathname === '/login') return null;
 
   const valid = await validateSession(request, env);
-  if (!valid) return redirect('/login');
+  if (!valid) {
+    if (url.pathname.startsWith('/api/')) return error('Unauthorized', 401);
+    return redirect('/login');
+  }
   return null;
 }

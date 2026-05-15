@@ -64,9 +64,33 @@ export async function fetchAssetHtml(assets: Fetcher, requestUrl: string, assetP
   return res.text();
 }
 
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+export function stringifyForHtmlScript(value: unknown): string {
+  return (JSON.stringify(value) ?? 'null')
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+export function contentDispositionFilename(filename: string): string {
+  const fallback = filename
+    .replace(/[\x00-\x1F\x7F"\\]/g, '_')
+    .trim() || 'download';
+  return `filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
 export function injectBranding(html: string, branding: { siteName: string; siteIconUrl: string }): string {
-  const tag = `<script id="branding-data" type="application/json">${JSON.stringify(branding)}</script>`;
-  const favicon = branding.siteIconUrl ? `<link rel="icon" type="image/png" href="${branding.siteIconUrl}">` : '';
+  const tag = `<script id="branding-data" type="application/json">${stringifyForHtmlScript(branding)}</script>`;
+  const favicon = branding.siteIconUrl ? `<link rel="icon" type="image/png" href="${escapeHtmlAttribute(branding.siteIconUrl)}">` : '';
   return html.replace('</head>', favicon + tag + '</head>');
 }
 

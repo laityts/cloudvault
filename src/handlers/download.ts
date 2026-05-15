@@ -1,5 +1,5 @@
 import { Env, FileMeta } from '../utils/types';
-import { error, getPreviewType, fetchAssetHtml, injectBranding, getMimeType } from '../utils/response';
+import { error, getPreviewType, fetchAssetHtml, injectBranding, getMimeType, stringifyForHtmlScript, contentDispositionFilename } from '../utils/response';
 import { verifySharePassword, resolveFolderShareToken, browseFolderShareLink, getSharedFolders, getExcludedFolders, isFolderShared } from '../api/share';
 import { getSettings } from '../api/settings';
 
@@ -45,6 +45,49 @@ function getStoredContentType(meta: Pick<FileMeta, 'name' | 'type'>): string {
   return getMimeType(meta.name);
 }
 
+function toHex(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+async function signShareCookiePayload(env: Env, payload: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(env.SESSION_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  return toHex(await crypto.subtle.sign('HMAC', key, encoder.encode(payload)));
+}
+
+function getCookieValue(request: Request, name: string): string | null {
+  const cookies = request.headers.get('Cookie') || '';
+  for (const part of cookies.split(';')) {
+    const trimmed = part.trim();
+    const eq = trimmed.indexOf('=');
+    if (eq < 0) continue;
+    if (trimmed.slice(0, eq) === name) return trimmed.slice(eq + 1);
+  }
+  return null;
+}
+
+async function createShareCookieValue(token: string, env: Env, maxAgeSeconds: number): Promise<string> {
+  const expiresAt = Date.now() + maxAgeSeconds * 1000;
+  const payload = token + '.' + expiresAt;
+  const signature = await signShareCookiePayload(env, payload);
+  return payload + '.' + signature;
+}
+
 // 修改：仅返回已完成上传的文件
 async function getFileByShareToken(token: string, env: Env): Promise<FileMeta | null> {
   const row = await env.DB.prepare(
@@ -75,9 +118,26 @@ async function resolveShare(token: string, env: Env): Promise<{ meta: FileMeta; 
   return { meta, expired };
 }
 
-function hasValidShareCookie(request: Request, token: string): boolean {
-  const cookies = request.headers.get('Cookie') || '';
-  return cookies.includes('share_' + token + '=verified');
+async function hasValidShareCookie(request: Request, token: string, env: Env): Promise<boolean> {
+  const rawValue = getCookieValue(request, 'share_' + token);
+  if (!rawValue) return false;
+
+  let value: string;
+  try {
+    value = decodeURIComponent(rawValue);
+  } catch {
+    return false;
+  }
+
+  const parts = value.split('.');
+  if (parts.length !== 3 || parts[0] !== token) return false;
+
+  const expiresAt = Number(parts[1]);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return false;
+
+  const payload = parts[0] + '.' + parts[1];
+  const expected = await signShareCookiePayload(env, payload);
+  return constantTimeEqual(expected, parts[2]);
 }
 
 export async function handleSharePage(request: Request, env: Env): Promise<Response> {
@@ -90,7 +150,7 @@ export async function handleSharePage(request: Request, env: Env): Promise<Respo
     if (result.expired) {
       return serveShareHtml(env, request, { error: 'This share link has expired.' });
     }
-    if (result.meta.sharePassword && !hasValidShareCookie(request, token)) {
+    if (result.meta.sharePassword && !(await hasValidShareCookie(request, token, env))) {
       return serveShareHtml(env, request, { needsPassword: true });
     }
     return serveShareHtml(env, request, {
@@ -112,7 +172,7 @@ export async function handleSharePage(request: Request, env: Env): Promise<Respo
     return serveShareHtml(env, request, { error: 'This share link has expired.' });
   }
 
-  if (folderLink.passwordHash && !hasValidShareCookie(request, token)) {
+  if (folderLink.passwordHash && !(await hasValidShareCookie(request, token, env))) {
     return serveShareHtml(env, request, { needsPassword: true, isFolder: true });
   }
 
@@ -138,7 +198,7 @@ export async function handleFolderShareDownload(request: Request, env: Env): Pro
   const folderLink = await resolveFolderShareToken(token, env);
   if (!folderLink) return error('Share link invalid', 404);
   if (folderLink.expiresAt && new Date(folderLink.expiresAt) < new Date()) return error('Share link expired', 404);
-  if (folderLink.passwordHash && !hasValidShareCookie(request, token)) return error('Password required', 403);
+  if (folderLink.passwordHash && !(await hasValidShareCookie(request, token, env))) return error('Password required', 403);
 
   const fileId = url.searchParams.get('fileId');
   if (!fileId) return error('fileId required', 400);
@@ -146,7 +206,7 @@ export async function handleFolderShareDownload(request: Request, env: Env): Pro
   const meta = await getFileById(env, fileId);
   if (!meta) return error('File not found', 404);
 
-  if (!meta.folder.startsWith(folderLink.folder) && meta.folder !== folderLink.folder) {
+  if (!isFolderShareMember(meta.folder, folderLink.folder)) {
     return error('File not in shared folder', 403);
   }
 
@@ -161,7 +221,7 @@ export async function handleFolderShareDownload(request: Request, env: Env): Pro
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
   headers.set('Cache-Control', 'public, max-age=14400, s-maxage=86400');
-  headers.set('Content-Disposition', 'attachment; filename="' + encodeURIComponent(meta.name) + '"');
+  headers.set('Content-Disposition', 'attachment; ' + contentDispositionFilename(meta.name));
   headers.set('Content-Length', String(object.size));
 
   return new Response(object.body, { headers });
@@ -175,7 +235,7 @@ export async function handleFolderSharePreview(request: Request, env: Env): Prom
   const folderLink = await resolveFolderShareToken(token, env);
   if (!folderLink) return error('Share link invalid', 404);
   if (folderLink.expiresAt && new Date(folderLink.expiresAt) < new Date()) return error('Share link expired', 404);
-  if (folderLink.passwordHash && !hasValidShareCookie(request, token)) return error('Password required', 403);
+  if (folderLink.passwordHash && !(await hasValidShareCookie(request, token, env))) return error('Password required', 403);
 
   const fileId = url.searchParams.get('fileId');
   if (!fileId) return error('fileId required', 400);
@@ -183,7 +243,7 @@ export async function handleFolderSharePreview(request: Request, env: Env): Prom
   const meta = await getFileById(env, fileId);
   if (!meta) return error('File not found', 404);
 
-  if (!meta.folder.startsWith(folderLink.folder) && meta.folder !== folderLink.folder) {
+  if (!isFolderShareMember(meta.folder, folderLink.folder)) {
     return error('File not in shared folder', 403);
   }
 
@@ -263,7 +323,7 @@ async function serveShareHtml(env: Env, request: Request, fileData: Record<strin
   html = injectBranding(html, { siteName: settings.siteName, siteIconUrl: settings.siteIconUrl });
   html = html.replace(
     '<script id="file-data" type="application/json">{}</script>',
-    '<script id="file-data" type="application/json">' + JSON.stringify(fileData) + '</script>'
+    '<script id="file-data" type="application/json">' + stringifyForHtmlScript(fileData) + '</script>'
   );
 
   return new Response(html, {
@@ -280,8 +340,19 @@ export async function handleShareDownload(request: Request, env: Env): Promise<R
   const result = await resolveShare(token, env);
   if (!result || result.expired) return error('Share link invalid or expired', 404);
 
-  if (result.meta.sharePassword && !hasValidShareCookie(request, token)) {
+  if (result.meta.sharePassword && !(await hasValidShareCookie(request, token, env))) {
     return error('Password required', 403);
+  }
+
+  const rangeHeader = request.headers.get('Range');
+  if (rangeHeader) {
+    const rangeResponse = await handleRangeRequest(request, env, result.meta);
+    if (rangeResponse.ok) {
+      await env.DB.prepare(
+        `UPDATE files SET downloads = downloads + 1 WHERE id = ?`
+      ).bind(result.meta.id).run();
+    }
+    return rangeResponse;
   }
 
   const object = await env.VAULT_BUCKET.get(result.meta.key);
@@ -295,13 +366,8 @@ export async function handleShareDownload(request: Request, env: Env): Promise<R
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
   headers.set('Cache-Control', 'public, max-age=14400, s-maxage=86400');
-  headers.set('Content-Disposition', 'attachment; filename="' + result.meta.name + '"');
+  headers.set('Content-Disposition', 'attachment; ' + contentDispositionFilename(result.meta.name));
   headers.set('Content-Length', String(object.size));
-
-  const rangeHeader = request.headers.get('Range');
-  if (rangeHeader) {
-    return handleRangeRequest(request, env, result.meta, object, headers);
-  }
 
   return new Response(object.body, { headers });
 }
@@ -314,7 +380,7 @@ export async function handlePreview(request: Request, env: Env): Promise<Respons
   const result = await resolveShare(token, env);
   if (!result || result.expired) return error('Share link invalid or expired', 404);
 
-  if (result.meta.sharePassword && !hasValidShareCookie(request, token)) {
+  if (result.meta.sharePassword && !(await hasValidShareCookie(request, token, env))) {
     return error('Password required', 403);
   }
 
@@ -339,36 +405,56 @@ export async function handlePreview(request: Request, env: Env): Promise<Respons
   return new Response(object.body, { headers });
 }
 
-function handleRangeRequest(
+function isFolderShareMember(fileFolder: string, sharedFolder: string): boolean {
+  return fileFolder === sharedFolder || fileFolder.startsWith(sharedFolder + '/');
+}
+
+async function handleRangeRequest(
   request: Request,
   env: Env,
   meta: FileMeta,
-  object: R2ObjectBody,
-  headers: Headers,
-): Response {
+): Promise<Response> {
   const rangeHeader = request.headers.get('Range') || '';
-  const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
+  const head = await env.VAULT_BUCKET.head(meta.key);
+  if (!head) return error('File not found in storage', 404);
 
-  if (!match) {
+  const parsedRange = parseByteRange(rangeHeader, head.size);
+
+  if (!parsedRange) {
+    const object = await env.VAULT_BUCKET.get(meta.key);
+    if (!object) return error('File not found in storage', 404);
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    headers.set('etag', object.httpEtag);
+    headers.set('Cache-Control', 'public, max-age=14400, s-maxage=86400');
+    headers.set('Content-Disposition', 'attachment; ' + contentDispositionFilename(meta.name));
+    headers.set('Content-Length', String(object.size));
     return new Response(object.body, { headers });
   }
 
-  const totalSize = object.size;
-  const start = match[1] ? parseInt(match[1], 10) : 0;
-  const end = match[2] ? parseInt(match[2], 10) : totalSize - 1;
-
-  if (start >= totalSize || end >= totalSize || start > end) {
+  if (parsedRange === 'unsatisfiable') {
     return new Response('Range Not Satisfiable', {
       status: 416,
-      headers: { 'Content-Range': 'bytes */' + totalSize },
+      headers: { 'Content-Range': 'bytes */' + head.size },
     });
   }
 
-  headers.set('Content-Range', 'bytes ' + start + '-' + end + '/' + totalSize);
-  headers.set('Content-Length', String(end - start + 1));
+  const length = parsedRange.end - parsedRange.start + 1;
+  const rangedObject = await env.VAULT_BUCKET.get(meta.key, {
+    range: { offset: parsedRange.start, length },
+  });
+  if (!rangedObject) return error('File not found in storage', 404);
+
+  const headers = new Headers();
+  head.writeHttpMetadata(headers);
+  headers.set('etag', head.httpEtag);
+  headers.set('Cache-Control', 'public, max-age=14400, s-maxage=86400');
+  headers.set('Content-Disposition', 'attachment; ' + contentDispositionFilename(meta.name));
+  headers.set('Content-Range', 'bytes ' + parsedRange.start + '-' + parsedRange.end + '/' + head.size);
+  headers.set('Content-Length', String(length));
   headers.set('Accept-Ranges', 'bytes');
 
-  return new Response(object.body, { status: 206, headers });
+  return new Response(rangedObject.body, { status: 206, headers });
 }
 
 export async function handleSharePassword(request: Request, env: Env): Promise<Response> {
@@ -400,10 +486,16 @@ export async function handleSharePassword(request: Request, env: Env): Promise<R
 
   if (contentType.includes('application/x-www-form-urlencoded')) {
     const formData = await request.formData();
-    password = formData.get('password') as string || '';
+    const value = formData.get('password');
+    password = typeof value === 'string' ? value : '';
   } else if (contentType.includes('application/json')) {
-    const body = await request.json<{ password: string }>();
-    password = body.password || '';
+    let body: { password?: unknown };
+    try {
+      body = await request.json<{ password?: unknown }>();
+    } catch {
+      return error('Invalid password payload', 400);
+    }
+    password = typeof body.password === 'string' ? body.password : '';
   } else {
     return error('Unsupported content type', 415);
   }
@@ -412,11 +504,12 @@ export async function handleSharePassword(request: Request, env: Env): Promise<R
   if (!valid) return error('Invalid password', 401);
 
   const cookieMaxAge = 24 * 60 * 60;
+  const cookieValue = await createShareCookieValue(token, env, cookieMaxAge);
   return new Response(null, {
     status: 302,
     headers: {
       Location: '/s/' + token,
-      'Set-Cookie': 'share_' + token + '=verified; Path=/s/' + token + '; HttpOnly; Secure; SameSite=Lax; Max-Age=' + cookieMaxAge,
+      'Set-Cookie': 'share_' + token + '=' + encodeURIComponent(cookieValue) + '; Path=/s/' + token + '; HttpOnly; Secure; SameSite=Lax; Max-Age=' + cookieMaxAge,
     },
   });
 }
@@ -459,7 +552,7 @@ export async function handleCleanDownload(request: Request, env: Env): Promise<R
   if (!headers.has('Content-Type')) {
     headers.set('Content-Type', getMimeType(meta.name));
   }
-  headers.set('Content-Disposition', 'attachment; filename="' + encodeURIComponent(meta.name) + '"');
+  headers.set('Content-Disposition', 'attachment; ' + contentDispositionFilename(meta.name));
 
   return new Response(object.body, { headers });
 }

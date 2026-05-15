@@ -1,5 +1,5 @@
 import { Env, FileMeta, MoveFilesRequest, MoveFilesResponse, MoveFolderRequest, MoveFolderResponse, CleanupIncompleteUploadsResponse } from '../utils/types';
-import { json, error, getMimeType } from '../utils/response';
+import { json, error, getMimeType, contentDispositionFilename } from '../utils/response';
 import { getSharedFolders, getExcludedFolders, isFolderShared } from './share';
 import { getAllowedUploadExtensionList, getSettings } from './settings';
 
@@ -48,6 +48,7 @@ function normalizeFolderPath(folder: string): string | null {
 function normalizeFileName(fileName: string): string | null {
   const raw = (fileName || '').trim();
   if (!raw || raw === '.' || raw === '..') return null;
+  if (/[\x00-\x1F\x7F]/.test(raw)) return null;
   if (raw.includes('/') || raw.includes('\\')) return null;
   return raw;
 }
@@ -427,7 +428,7 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
   const id = crypto.randomUUID();
 
   const r2Object = await env.VAULT_BUCKET.put(key, request.body, {
-    httpMetadata: { contentType, contentDisposition: 'attachment; filename="' + fileName + '"' },
+    httpMetadata: { contentType, contentDisposition: 'attachment; ' + contentDispositionFilename(fileName) },
     customMetadata: { fileId: id },
   });
 
@@ -498,7 +499,7 @@ async function handleMultipartCreate(request: Request, env: Env): Promise<Respon
   if (conflict.exists) return uploadConflictResponse(conflict);
 
   const multipart = await env.VAULT_BUCKET.createMultipartUpload(key, {
-    httpMetadata: { contentType, contentDisposition: 'attachment; filename="' + fileName + '"' },
+    httpMetadata: { contentType, contentDisposition: 'attachment; ' + contentDispositionFilename(fileName) },
   });
 
   const id = crypto.randomUUID();
@@ -875,7 +876,7 @@ export async function download(request: Request, env: Env): Promise<Response> {
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
   headers.set('Cache-Control', 'private, max-age=14400');
-  headers.set('Content-Disposition', 'attachment; filename="' + meta.name + '"');
+  headers.set('Content-Disposition', 'attachment; ' + contentDispositionFilename(meta.name));
   return new Response(object.body, { headers });
 }
 
@@ -887,20 +888,31 @@ export async function deleteFiles(request: Request, env: Env): Promise<Response>
     if (!id) return error('File ID required', 400);
     ids = [id];
   } else {
-    const body = await request.json<{ ids: string[] }>();
-    ids = body.ids;
+    const body = await readJsonBody<{ ids?: unknown }>(request);
+    ids = Array.isArray(body?.ids)
+      ? body.ids.filter((id): id is string => typeof id === 'string' && id.trim()).map(id => id.trim())
+      : [];
   }
-  if (!ids || ids.length === 0) return error('No file IDs provided', 400);
+  ids = Array.from(new Set(ids));
+  if (ids.length === 0) return error('No file IDs provided', 400);
   let totalSizeRemoved = 0;
+  let deletedCount = 0;
+  let statsCountRemoved = 0;
   for (const id of ids) {
     const meta = await getFileById(env, id);
     if (!meta) continue;
     await env.VAULT_BUCKET.delete(meta.key);
     await env.DB.prepare(`DELETE FROM files WHERE id = ?`).bind(id).run();
-    totalSizeRemoved += meta.size;
+    deletedCount++;
+    if (!meta.uploadStatus || meta.uploadStatus === 'done') {
+      totalSizeRemoved += meta.size;
+      statsCountRemoved++;
+    }
   }
-  await updateStatsCounters(env, -totalSizeRemoved, -ids.length);
-  return json({ deleted: ids.length });
+  if (statsCountRemoved > 0) {
+    await updateStatsCounters(env, -totalSizeRemoved, -statsCountRemoved);
+  }
+  return json({ deleted: deletedCount });
 }
 
 export async function rename(request: Request, env: Env): Promise<Response> {
@@ -909,10 +921,33 @@ export async function rename(request: Request, env: Env): Promise<Response> {
   if (!id) return error('File ID required', 400);
   const meta = await getFileById(env, id);
   if (!meta) return error('File not found', 404);
-  const body = await request.json<{ name: string }>();
-  if (!body.name?.trim()) return error('Name required', 400);
-  const newName = body.name.trim();
-  await env.DB.prepare(`UPDATE files SET name = ? WHERE id = ?`).bind(newName, id).run();
+  if (meta.uploadStatus && meta.uploadStatus !== 'done') return error('Cannot rename unfinished upload', 409);
+
+  const body = await readJsonBody<{ name?: unknown }>(request);
+  const newName = normalizeFileName(typeof body?.name === 'string' ? body.name : '');
+  if (!newName) return error('Invalid file name', 400);
+  if (newName === meta.name) return json(meta);
+
+  const newKey = buildFileKey(meta.folder, newName);
+  const existingMeta = await findExistingUploadedFileByKey(env, newKey);
+  if (existingMeta && existingMeta.id !== id) return error('Target file already exists', 409);
+  const existingObject = await env.VAULT_BUCKET.head(newKey);
+  if (existingObject) return error('Target file already exists', 409);
+
+  const object = await env.VAULT_BUCKET.get(meta.key);
+  if (!object) return error('File not found in storage', 404);
+
+  await env.VAULT_BUCKET.put(newKey, object.body, {
+    httpMetadata: {
+      ...object.httpMetadata,
+      contentDisposition: 'attachment; ' + contentDispositionFilename(newName),
+    },
+    customMetadata: object.customMetadata,
+  });
+  await env.VAULT_BUCKET.delete(meta.key);
+
+  await env.DB.prepare(`UPDATE files SET key = ?, name = ? WHERE id = ?`).bind(newKey, newName, id).run();
+  meta.key = newKey;
   meta.name = newName;
   return json(meta);
 }
@@ -1075,6 +1110,7 @@ export async function createFolder(request: Request, env: Env): Promise<Response
   if (!folderNamePart) return error('Folder name required', 400);
   if (!parentFolder) return error('Invalid parent folder', 400);
   const folderName = parentFolder === 'root' ? folderNamePart : parentFolder + '/' + folderNamePart;
+  if (await folderTreeExists(env, folderName)) return error('Folder already exists', 409);
   await env.DB.prepare(`INSERT INTO folders (path, created_at) VALUES (?, ?)`).bind(folderName, new Date().toISOString()).run();
   return json({ folder: folderName }, 201);
 }
@@ -1229,26 +1265,50 @@ export async function listFolders(_request: Request, env: Env): Promise<Response
 
 export async function moveFiles(request: Request, env: Env): Promise<Response> {
   const body = await readJsonBody<MoveFilesRequest>(request);
-  if (!body?.ids?.length) return error('No file IDs provided', 400);
-  const targetFolder = normalizeFolderPath(typeof body.targetFolder === 'string' ? body.targetFolder : '');
+  const requestedIds = Array.from(new Set(
+    Array.isArray(body?.ids)
+      ? body.ids.filter((id): id is string => typeof id === 'string' && id.trim()).map(id => id.trim())
+      : []
+  ));
+  if (requestedIds.length === 0) return error('No file IDs provided', 400);
+  const targetFolder = normalizeFolderPath(typeof body?.targetFolder === 'string' ? body.targetFolder : '');
   if (!targetFolder) return error('Target folder required', 400);
   if (targetFolder !== 'root' && !(await folderTreeExists(env, targetFolder))) {
     return error('Target folder not found', 404);
   }
 
-  const files = await listStoredFilesByIds(env, body.ids);
+  const files = await listStoredFilesByIds(env, requestedIds);
   const movableFiles = files.filter(file =>
     file.folder !== targetFolder &&
     (!file.uploadStatus || file.uploadStatus === 'done')
   );
+  const targetKeyCounts = new Map<string, number>();
+  for (const file of movableFiles) {
+    const targetKey = buildFileKey(targetFolder, file.name);
+    targetKeyCounts.set(targetKey, (targetKeyCounts.get(targetKey) || 0) + 1);
+  }
+
+  const moveCandidates: StoredFileRow[] = [];
+  for (const file of movableFiles) {
+    const targetKey = buildFileKey(targetFolder, file.name);
+    if ((targetKeyCounts.get(targetKey) || 0) > 1) continue;
+
+    const existingMeta = await findExistingUploadedFileByKey(env, targetKey);
+    if (existingMeta && existingMeta.id !== file.id) continue;
+
+    const existingObject = await env.VAULT_BUCKET.head(targetKey);
+    if (existingObject && targetKey !== file.key) continue;
+
+    moveCandidates.push(file);
+  }
 
   let moved = 0;
-  await runWithConcurrency(movableFiles, MOVE_CONCURRENCY, async file => {
+  await runWithConcurrency(moveCandidates, MOVE_CONCURRENCY, async file => {
     const success = await relocateStoredFile(env, file, targetFolder);
     if (success) moved += 1;
   });
 
-  return json<MoveFilesResponse>({ moved });
+  return json<MoveFilesResponse>({ moved, skipped: Math.max(0, requestedIds.length - moved) });
 }
 
 export async function moveFolder(request: Request, env: Env): Promise<Response> {
@@ -1296,7 +1356,7 @@ export async function thumbnail(request: Request, env: Env): Promise<Response> {
   headers.set('etag', object.httpEtag);
   headers.set('Content-Type', contentType);
   headers.set('Cache-Control', 'public, max-age=31536000, immutable');
-  headers.set('Content-Disposition', 'inline; filename="' + encodeURIComponent(meta.name) + '"');
+  headers.set('Content-Disposition', 'inline; ' + contentDispositionFilename(meta.name));
   return new Response(object.body, { headers });
 }
 
@@ -1332,7 +1392,7 @@ export async function preview(request: Request, env: Env): Promise<Response> {
       head.writeHttpMetadata(headers);
       headers.set('etag', head.httpEtag);
       headers.set('Content-Type', contentType);
-      headers.set('Content-Disposition', 'inline; filename="' + encodeURIComponent(meta.name) + '"');
+      headers.set('Content-Disposition', 'inline; ' + contentDispositionFilename(meta.name));
       headers.set('Cache-Control', 'private, max-age=14400, stale-while-revalidate=86400');
       headers.set('Accept-Ranges', 'bytes');
       headers.set('Content-Range', 'bytes ' + parsedRange.start + '-' + parsedRange.end + '/' + head.size);
@@ -1347,7 +1407,7 @@ export async function preview(request: Request, env: Env): Promise<Response> {
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
   headers.set('Content-Type', contentType);
-  headers.set('Content-Disposition', 'inline; filename="' + encodeURIComponent(meta.name) + '"');
+  headers.set('Content-Disposition', 'inline; ' + contentDispositionFilename(meta.name));
   headers.set('Cache-Control', 'private, max-age=14400, stale-while-revalidate=86400');
   headers.set('Accept-Ranges', 'bytes');
   headers.set('Content-Length', String(object.size));
@@ -1355,11 +1415,14 @@ export async function preview(request: Request, env: Env): Promise<Response> {
 }
 
 export async function zipDownload(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ ids: string[] }>();
-  if (!body.ids?.length) return error('No file IDs provided', 400);
-  if (body.ids.length > 100) return error('Max 100 files per zip', 400);
+  const body = await readJsonBody<{ ids?: unknown }>(request);
+  const ids = Array.isArray(body?.ids)
+    ? Array.from(new Set(body.ids.filter((id): id is string => typeof id === 'string' && id.trim()).map(id => id.trim())))
+    : [];
+  if (ids.length === 0) return error('No file IDs provided', 400);
+  if (ids.length > 100) return error('Max 100 files per zip', 400);
   const fileMetas: FileMeta[] = [];
-  for (const id of body.ids) {
+  for (const id of ids) {
     const meta = await getFileById(env, id);
     if (meta && (!meta.uploadStatus || meta.uploadStatus === 'done')) fileMetas.push(meta);
   }
@@ -1370,7 +1433,7 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
     if (!object) return error('File not found in storage', 404);
     const headers = new Headers();
     object.writeHttpMetadata(headers);
-    headers.set('Content-Disposition', 'attachment; filename="' + encodeURIComponent(meta.name) + '"');
+    headers.set('Content-Disposition', 'attachment; ' + contentDispositionFilename(meta.name));
     headers.set('Content-Length', String(object.size));
     return new Response(object.body, { headers });
   }

@@ -930,7 +930,13 @@ function cloudvault() {
             this.remapFolderState(folder, nextFolder);
             this.showToast('文件夹已移动', 'success');
           } else {
-            this.showToast((data?.moved || 0) + ' 个文件已移动', 'success');
+            const moved = Number.isFinite(Number(data?.moved)) ? Number(data.moved) : 0;
+            const skipped = Number.isFinite(Number(data?.skipped)) ? Number(data.skipped) : 0;
+            if (skipped > 0) {
+              this.showToast(moved + ' 个文件已移动，' + skipped + ' 个已跳过', moved > 0 ? 'info' : 'error');
+            } else {
+              this.showToast(moved + ' 个文件已移动', 'success');
+            }
           }
           this.clearAllFileCache();
           await Promise.all([this.fetchFiles(false), this.fetchFolders()]);
@@ -1232,9 +1238,11 @@ function cloudvault() {
           body: JSON.stringify({ ids }),
         });
         if (res && res.ok) {
+          const data = await res.json().catch(() => null);
+          const deleted = Number.isFinite(Number(data?.deleted)) ? Number(data.deleted) : ids.length;
           this.files = this.files.filter(f => !ids.includes(f.id));
           this.clearSelection();
-          this.showToast(ids.length + ' 个文件已删除', 'success');
+          this.showToast(deleted + ' 个文件已删除', 'success');
           this.fetchStats();
           // 清除当前文件夹缓存（可选，但确保下次加载时数据正确）
           this.clearCurrentFolderCache();
