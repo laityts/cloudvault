@@ -1545,6 +1545,119 @@ function cloudvault() {
       return this.getFilePreviewMode(file) !== 'none';
     },
 
+    normalizeTextEncoding(label) {
+      const raw = typeof label === 'string'
+        ? label.trim().toLowerCase().replace(/^["']|["']$/g, '')
+        : '';
+      if (!raw) return '';
+
+      const aliasMap = {
+        utf8: 'utf-8',
+        utf16: 'utf-16le',
+        'utf-16': 'utf-16le',
+        gbk: 'gb18030',
+        gb2312: 'gb18030',
+        cp936: 'gb18030',
+      };
+      return aliasMap[raw] || raw;
+    },
+
+    extractResponseCharset(res) {
+      const contentType = res?.headers?.get('content-type') || '';
+      const match = contentType.match(/charset\s*=\s*("?)([^;"\s]+)\1/i);
+      return match ? this.normalizeTextEncoding(match[2]) : '';
+    },
+
+    detectTextBom(bytes) {
+      if (!(bytes instanceof Uint8Array) || bytes.length < 2) return '';
+      if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) return 'utf-8';
+      if (bytes[0] === 0xFF && bytes[1] === 0xFE) return 'utf-16le';
+      if (bytes[0] === 0xFE && bytes[1] === 0xFF) return 'utf-16be';
+      return '';
+    },
+
+    guessUtf16Encoding(bytes) {
+      if (!(bytes instanceof Uint8Array) || bytes.length < 4) return '';
+      const sampleSize = Math.min(bytes.length, 512);
+      let evenZeros = 0;
+      let oddZeros = 0;
+      let evenCount = 0;
+      let oddCount = 0;
+
+      for (let i = 0; i < sampleSize; i++) {
+        if (i % 2 === 0) {
+          evenCount += 1;
+          if (bytes[i] === 0) evenZeros += 1;
+        } else {
+          oddCount += 1;
+          if (bytes[i] === 0) oddZeros += 1;
+        }
+      }
+
+      const evenRate = evenCount > 0 ? evenZeros / evenCount : 0;
+      const oddRate = oddCount > 0 ? oddZeros / oddCount : 0;
+      if (oddRate > 0.35 && evenRate < 0.1) return 'utf-16le';
+      if (evenRate > 0.35 && oddRate < 0.1) return 'utf-16be';
+      return '';
+    },
+
+    decodeTextBytes(bytes, encoding) {
+      try {
+        return new TextDecoder(encoding).decode(bytes);
+      } catch {
+        return '';
+      }
+    },
+
+    scoreDecodedText(text) {
+      if (typeof text !== 'string') return Number.NEGATIVE_INFINITY;
+      if (!text) return 0;
+
+      const replacementCount = (text.match(/\uFFFD/g) || []).length;
+      const nullCount = (text.match(/\u0000/g) || []).length;
+      const controlCount = (text.match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g) || []).length;
+      const readableCount = (text.match(/[\u4E00-\u9FFF\u3400-\u4DBFA-Za-z0-9_ \t\r\n.,;:!?，。；：！？、"'“”‘’()\[\]{}<>@#%&*+=/\\|-]/g) || []).length;
+
+      return readableCount - replacementCount * 30 - nullCount * 60 - controlCount * 10;
+    },
+
+    decodePreviewText(buffer, res) {
+      const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+      if (bytes.length === 0) return '';
+
+      const bomEncoding = this.detectTextBom(bytes);
+      if (bomEncoding) return this.decodeTextBytes(bytes, bomEncoding);
+
+      const responseEncoding = this.extractResponseCharset(res);
+      if (responseEncoding) {
+        const decoded = this.decodeTextBytes(bytes, responseEncoding);
+        if (decoded) return decoded;
+      }
+
+      const guessedUtf16 = this.guessUtf16Encoding(bytes);
+      const candidates = Array.from(new Set(
+        [guessedUtf16, 'utf-8', 'gb18030', 'utf-16le', 'utf-16be']
+          .filter(Boolean)
+          .map(label => this.normalizeTextEncoding(label))
+      ));
+
+      let bestText = '';
+      let bestScore = Number.NEGATIVE_INFINITY;
+
+      // 部分文本实际是 GBK / UTF-16，这里按候选编码试解后选可读性更高的结果，减少中文乱码。
+      for (const encoding of candidates) {
+        const decoded = this.decodeTextBytes(bytes, encoding);
+        if (!decoded) continue;
+        const score = this.scoreDecodedText(decoded);
+        if (score > bestScore) {
+          bestScore = score;
+          bestText = decoded;
+        }
+      }
+
+      return bestText || this.decodeTextBytes(bytes, 'utf-8');
+    },
+
     isTextPreviewable(file) {
       const type = (file?.type || '').toLowerCase();
       const name = (file?.name || '').toLowerCase();
@@ -1618,7 +1731,8 @@ function cloudvault() {
             return;
           }
           if (!res.ok && res.status !== 206) throw new Error('Preview API returned ' + res.status);
-          const text = await res.text();
+          const buffer = await res.arrayBuffer();
+          const text = this.decodePreviewText(buffer, res);
           const truncated = fileSize > maxTextBytes;
           const note = truncated
             ? '<div class="preview-note">文件较大，仅显示前 ' + this.formatBytes(maxTextBytes) + '</div>'
