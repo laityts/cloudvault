@@ -210,6 +210,7 @@ async function handleApiRoutes(
   if (path === '/api/folders' && method === 'POST') return files.createFolder(request, env);
   if (path === '/api/folders' && method === 'DELETE') return files.deleteFolder(request, env);
   if (path === '/api/folders' && method === 'PUT') return files.renameFolder(request, env);
+  if (path === '/api/folders/move' && method === 'POST') return files.moveFolder(request, env);
   if (path === '/api/folders/exclude' && method === 'POST') return share.toggleFolderExclude(request, env);
   if (path === '/api/folders/share' && method === 'POST') return share.shareFolderToggle(request, env);
   if (path === '/api/folders/shared' && method === 'GET') return share.listSharedFolders(request, env);

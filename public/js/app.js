@@ -26,7 +26,7 @@ function cloudvault() {
     shareModal: { show: false, file: null, password: '', expiresInDays: 0 },
     renameModal: { show: false, file: null, newName: '' },
     deleteModal: { show: false, ids: [] },
-    moveModal: { show: false, files: [], targetFolder: 'root' },
+    moveModal: { show: false, mode: 'files', files: [], folder: '', targetFolder: 'root' },
     _branding: JSON.parse(document.getElementById('branding-data')?.textContent || '{"siteName":"CloudVault","siteIconUrl":""}'),
     settingsModal: { show: false, guestPageEnabled: false, showLoginButton: true, siteName: 'CloudVault', siteIconUrl: '', allowedUploadExtensions: '', _iconError: false },
     renameFolderModal: { show: false, oldName: '', newName: '' },
@@ -249,6 +249,27 @@ function cloudvault() {
         return !relativeName.includes('/');
       });
       return nestedFolders.map(f => ({ ...f, shortName: f.name.slice(prefix.length) }));
+    },
+
+    get moveTargetFolders() {
+      const folders = Array.isArray(this.folders) ? this.folders : [];
+      if (this.moveModal.mode !== 'folder' || !this.moveModal.folder) return folders;
+      return folders.filter(folder => this.canMoveFolderTo(this.moveModal.folder, folder.name));
+    },
+
+    get moveModalSummary() {
+      if (this.moveModal.mode === 'folder') {
+        return this.moveModal.folder ? '正在移动文件夹：' + this.moveModal.folder : '请选择目标文件夹';
+      }
+      return '正在移动 ' + this.moveModal.files.length + ' 个文件';
+    },
+
+    get canConfirmMove() {
+      if (!this.moveModal.show) return false;
+      if (this.moveModal.mode === 'folder') {
+        return this.canMoveFolderTo(this.moveModal.folder, this.moveModal.targetFolder);
+      }
+      return Array.isArray(this.moveModal.files) && this.moveModal.files.length > 0 && typeof this.moveModal.targetFolder === 'string';
     },
 
     async init() {
@@ -628,6 +649,75 @@ function cloudvault() {
       return false;
     },
 
+    refreshFolderShareHash() {
+      this._folderShareHash = this.folders
+        .map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0))
+        .join('|');
+    },
+
+    getFolderParentPath(folderPath) {
+      if (typeof folderPath !== 'string' || !folderPath) return 'root';
+      const index = folderPath.lastIndexOf('/');
+      return index >= 0 ? folderPath.slice(0, index) : 'root';
+    },
+
+    buildMovedFolderPath(folderPath, targetFolder) {
+      if (typeof folderPath !== 'string' || !folderPath || typeof targetFolder !== 'string' || !targetFolder) {
+        return '';
+      }
+      const folderName = folderPath.split('/').pop();
+      return targetFolder === 'root' ? folderName : targetFolder + '/' + folderName;
+    },
+
+    canMoveFolderTo(folderPath, targetFolder) {
+      if (typeof folderPath !== 'string' || !folderPath) return false;
+      if (typeof targetFolder !== 'string' || !targetFolder) return false;
+      if (targetFolder === folderPath || targetFolder.startsWith(folderPath + '/')) return false;
+      return this.buildMovedFolderPath(folderPath, targetFolder) !== folderPath;
+    },
+
+    getDefaultFolderMoveTarget(folderPath) {
+      const parentFolder = this.getFolderParentPath(folderPath);
+      const grandParentFolder = this.getFolderParentPath(parentFolder);
+      const candidates = [
+        grandParentFolder,
+        'root',
+        ...this.folders.map(folder => folder.name),
+      ];
+      return candidates.find(targetFolder => this.canMoveFolderTo(folderPath, targetFolder)) || 'root';
+    },
+
+    remapFolderState(oldPath, newPath) {
+      if (typeof oldPath !== 'string' || !oldPath || typeof newPath !== 'string' || !newPath) return;
+      if (this.currentFolder === oldPath || this.currentFolder.startsWith(oldPath + '/')) {
+        this.currentFolder = newPath + this.currentFolder.slice(oldPath.length);
+      }
+
+      const nextExpanded = {};
+      Object.keys(this.expandedFolders || {}).forEach(path => {
+        if (!this.expandedFolders[path]) return;
+        if (path === '__root__') {
+          nextExpanded[path] = true;
+          return;
+        }
+        if (path === oldPath || path.startsWith(oldPath + '/')) {
+          nextExpanded[newPath + path.slice(oldPath.length)] = true;
+          return;
+        }
+        nextExpanded[path] = true;
+      });
+      this.expandedFolders = nextExpanded;
+
+      this.folders = this.folders.map(folder => {
+        if (folder.name === oldPath || folder.name.startsWith(oldPath + '/')) {
+          return { ...folder, name: newPath + folder.name.slice(oldPath.length) };
+        }
+        return folder;
+      });
+      this.refreshFolderShareHash();
+      this._expandVer++;
+    },
+
     getFolderObject(shortName) {
       const rawName = typeof shortName === 'string' ? shortName : '';
       const scopedPath = this.currentFolder === 'root' ? rawName : this.currentFolder + '/' + rawName;
@@ -739,26 +829,16 @@ function cloudvault() {
           body: JSON.stringify({ oldName, newName: fullNewName }),
         });
         if (res && res.ok) {
-          if (this.currentFolder === oldName || this.currentFolder.startsWith(oldName + '/')) {
-            this.currentFolder = fullNewName + this.currentFolder.slice(oldName.length);
-          }
-          if (this.expandedFolders[oldName]) {
-            delete this.expandedFolders[oldName];
-            this.expandedFolders[fullNewName] = true;
-          }
-          this.folders = this.folders.map(f => {
-            if (f.name === oldName) return { ...f, name: fullNewName };
-            if (f.name.startsWith(oldName + '/')) return { ...f, name: fullNewName + f.name.slice(oldName.length) };
-            return f;
-          });
-          this._folderShareHash = this.folders.map(f => f.name + (f.shared ? 1 : 0) + (f.directlyShared ? 1 : 0) + (f.excluded ? 1 : 0)).join('|');
-          this._expandVer++;
+          this.remapFolderState(oldName, fullNewName);
           this.showToast('文件夹重命名成功', 'success');
-          // 清除当前文件夹缓存并重新加载文件列表
-          this.clearCurrentFolderCache();
-          await this.fetchFiles(false);
-        } else { this.showToast('重命名失败', 'error'); }
-      } catch { this.showToast('重命名失败', 'error'); }
+          this.clearAllFileCache();
+          await Promise.all([this.fetchFolders(), this.fetchFiles(false)]);
+        } else {
+          this.showToast(await this.readApiError(res, '重命名失败'), 'error');
+        }
+      } catch {
+        this.showToast('重命名失败', 'error');
+      }
     },
 
     showDeleteFolderModal(folder) {
@@ -790,45 +870,87 @@ function cloudvault() {
           if (data.deletedSubfolders > 0) parts.push(data.deletedSubfolders + ' 个子文件夹' + (data.deletedSubfolders > 1 ? '' : ''));
           var msg = '文件夹已删除' + (parts.length ? ' — 已移除 ' + parts.join(' 和 ') : '');
           this.showToast(msg, 'success');
-          // 清除当前文件夹缓存并重新加载文件列表
-          this.clearCurrentFolderCache();
-          await this.fetchFiles(false);
-        } else { this.showToast('删除失败', 'error'); }
-      } catch { this.showToast('删除失败', 'error'); }
+          this.clearAllFileCache();
+          await Promise.all([this.fetchFolders(), this.fetchFiles(false)]);
+        } else {
+          this.showToast(await this.readApiError(res, '删除失败'), 'error');
+        }
+      } catch {
+        this.showToast('删除失败', 'error');
+      }
     },
 
     showMoveModal(file) {
       this.ctxMenu.show = false;
-      this.moveModal = { show: true, files: [file.id], targetFolder: 'root' };
+      this.moveModal = { show: true, mode: 'files', files: [file.id], folder: '', targetFolder: 'root' };
     },
 
     moveSelected() {
-      this.moveModal = { show: true, files: [...this.selectedFiles], targetFolder: 'root' };
+      this.moveModal = { show: true, mode: 'files', files: [...this.selectedFiles], folder: '', targetFolder: 'root' };
+    },
+
+    showMoveFolderModal(folder) {
+      this.folderCtxMenu.show = false;
+      if (!folder || typeof folder.name !== 'string' || !folder.name) return;
+      this.moveModal = {
+        show: true,
+        mode: 'folder',
+        files: [],
+        folder: folder.name,
+        targetFolder: this.getDefaultFolderMoveTarget(folder.name),
+      };
     },
 
     async confirmMove() {
-      const { files: ids, targetFolder } = this.moveModal;
+      const { mode, files: ids, folder, targetFolder } = this.moveModal;
       this.moveModal.show = false;
       try {
-        const res = await this.apiFetch('/api/files/move', {
+        const url = mode === 'folder' ? '/api/folders/move' : '/api/files/move';
+        const body = mode === 'folder'
+          ? { sourceFolder: folder, targetFolder }
+          : { ids, targetFolder };
+        const res = await this.apiFetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids, targetFolder }),
+          body: JSON.stringify(body),
         });
         if (res && res.ok) {
-          const data = await res.json();
-          this.showToast(data.moved + ' 个文件已移动', 'success');
-          // 清除当前文件夹缓存并重新加载
-          this.clearCurrentFolderCache();
+          const data = await res.json().catch(() => null);
+          if (mode === 'folder') {
+            const nextFolder = typeof data?.folder === 'string' ? data.folder : this.buildMovedFolderPath(folder, targetFolder);
+            this.remapFolderState(folder, nextFolder);
+            this.showToast('文件夹已移动', 'success');
+          } else {
+            this.showToast((data?.moved || 0) + ' 个文件已移动', 'success');
+          }
+          this.clearAllFileCache();
           await Promise.all([this.fetchFiles(false), this.fetchFolders()]);
-        } else { this.showToast('移动失败', 'error'); }
-      } catch { this.showToast('移动失败', 'error'); }
+        } else {
+          this.showToast(await this.readApiError(res, '移动失败'), 'error');
+        }
+      } catch {
+        this.showToast('移动失败', 'error');
+      }
     },
 
     async apiFetch(url, opts = {}) {
       const res = await fetch(url, { credentials: 'same-origin', ...opts });
       if (res.status === 401) { window.location.href = '/login'; return null; }
       return res;
+    },
+
+    async readApiError(res, fallback) {
+      if (!res) return fallback;
+      try {
+        const data = await res.json();
+        return typeof data?.error === 'string' && data.error ? data.error : fallback;
+      } catch {
+        return fallback;
+      }
+    },
+
+    clearAllFileCache() {
+      this.cache = {};
     },
 
     // 清除当前文件夹和搜索条件下的所有缓存

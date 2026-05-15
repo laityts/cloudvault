@@ -83,6 +83,25 @@ export interface CreateShareRequest {
   expiresInDays?: number;
 }
 
+export interface MoveFilesRequest {
+  ids: string[];
+  targetFolder: string;
+}
+
+export interface MoveFilesResponse {
+  moved: number;
+}
+
+export interface MoveFolderRequest {
+  sourceFolder: string;
+  targetFolder: string;
+}
+
+export interface MoveFolderResponse {
+  folder: string;
+  previousFolder: string;
+}
+
 export interface MultipartCreateResponse {
   uploadId: string;
   key: string;

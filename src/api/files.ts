@@ -1,4 +1,4 @@
-import { Env, FileMeta } from '../utils/types';
+import { Env, FileMeta, MoveFilesRequest, MoveFilesResponse, MoveFolderRequest, MoveFolderResponse } from '../utils/types';
 import { json, error, getMimeType } from '../utils/response';
 import { getSharedFolders, getExcludedFolders, isFolderShared } from './share';
 import { getAllowedUploadExtensionList, getSettings } from './settings';
@@ -49,6 +49,27 @@ function normalizeFileName(fileName: string): string | null {
   if (!raw || raw === '.' || raw === '..') return null;
   if (raw.includes('/') || raw.includes('\\')) return null;
   return raw;
+}
+
+function getFolderBaseName(folder: string): string {
+  const idx = folder.lastIndexOf('/');
+  return idx >= 0 ? folder.slice(idx + 1) : folder;
+}
+
+function buildFileKey(folder: string, fileName: string): string {
+  return folder === 'root' ? fileName : folder + '/' + fileName;
+}
+
+function remapFolderPath(path: string, oldPath: string, newPath: string): string {
+  return path === oldPath ? newPath : newPath + path.slice(oldPath.length);
+}
+
+async function readJsonBody<T>(request: Request): Promise<T | null> {
+  try {
+    return await request.json<T>();
+  } catch {
+    return null;
+  }
 }
 
 function parseUploadRequestMeta(request: Request): { fileName: string; folder: string; contentType: string; key: string } | null {
@@ -811,18 +832,141 @@ export async function rename(request: Request, env: Env): Promise<Response> {
   return json(meta);
 }
 
+async function folderTreeExists(env: Env, folder: string): Promise<boolean> {
+  if (folder === 'root') return true;
+  const likePattern = folder + '/%';
+  const folderRow = await env.DB.prepare(
+    `SELECT path FROM folders WHERE path = ? OR path LIKE ? LIMIT 1`
+  ).bind(folder, likePattern).first<{ path: string }>();
+  if (folderRow) return true;
+
+  const fileRow = await env.DB.prepare(
+    `SELECT id FROM files WHERE folder = ? OR folder LIKE ? LIMIT 1`
+  ).bind(folder, likePattern).first<{ id: string }>();
+  return !!fileRow;
+}
+
+async function hasIncompleteUploadsInFolderTree(env: Env, folder: string): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT id
+     FROM files
+     WHERE (folder = ? OR folder LIKE ?)
+       AND upload_status IS NOT NULL
+       AND upload_status != 'done'
+     LIMIT 1`
+  ).bind(folder, folder + '/%').first<{ id: string }>();
+  return !!row;
+}
+
+async function rewriteFolderTree(env: Env, oldPath: string, newPath: string): Promise<void> {
+  const folderRows = await env.DB.prepare(
+    `SELECT path
+     FROM folders
+     WHERE path = ? OR path LIKE ?
+     ORDER BY LENGTH(path) ASC`
+  ).bind(oldPath, oldPath + '/%').all<{ path: string }>();
+
+  for (const row of folderRows.results) {
+    const currentPath = row.path as string;
+    const nextPath = remapFolderPath(currentPath, oldPath, newPath);
+    if (currentPath === nextPath) continue;
+    await env.DB.prepare(`UPDATE folders SET path = ? WHERE path = ?`).bind(nextPath, currentPath).run();
+  }
+
+  const shareRows = await env.DB.prepare(
+    `SELECT folder
+     FROM folder_shares
+     WHERE folder = ? OR folder LIKE ?
+     ORDER BY LENGTH(folder) ASC`
+  ).bind(oldPath, oldPath + '/%').all<{ folder: string }>();
+
+  for (const row of shareRows.results) {
+    const currentPath = row.folder as string;
+    const nextPath = remapFolderPath(currentPath, oldPath, newPath);
+    if (currentPath === nextPath) continue;
+    await env.DB.prepare(`UPDATE folder_shares SET folder = ? WHERE folder = ?`).bind(nextPath, currentPath).run();
+  }
+
+  const excludeRows = await env.DB.prepare(
+    `SELECT folder
+     FROM folder_excludes
+     WHERE folder = ? OR folder LIKE ?
+     ORDER BY LENGTH(folder) ASC`
+  ).bind(oldPath, oldPath + '/%').all<{ folder: string }>();
+
+  for (const row of excludeRows.results) {
+    const currentPath = row.folder as string;
+    const nextPath = remapFolderPath(currentPath, oldPath, newPath);
+    if (currentPath === nextPath) continue;
+    await env.DB.prepare(`UPDATE folder_excludes SET folder = ? WHERE folder = ?`).bind(nextPath, currentPath).run();
+  }
+
+  const linkMetaRows = await env.DB.prepare(
+    `SELECT folder
+     FROM folder_share_meta
+     WHERE folder = ? OR folder LIKE ?
+     ORDER BY LENGTH(folder) ASC`
+  ).bind(oldPath, oldPath + '/%').all<{ folder: string }>();
+
+  for (const row of linkMetaRows.results) {
+    const currentPath = row.folder as string;
+    const nextPath = remapFolderPath(currentPath, oldPath, newPath);
+    if (currentPath === nextPath) continue;
+    await env.DB.prepare(`UPDATE folder_share_meta SET folder = ? WHERE folder = ?`).bind(nextPath, currentPath).run();
+  }
+
+  const linkRows = await env.DB.prepare(
+    `SELECT token, folder
+     FROM folder_share_links
+     WHERE folder = ? OR folder LIKE ?
+     ORDER BY LENGTH(folder) ASC`
+  ).bind(oldPath, oldPath + '/%').all<{ token: string; folder: string }>();
+
+  for (const row of linkRows.results) {
+    const currentPath = row.folder as string;
+    const nextPath = remapFolderPath(currentPath, oldPath, newPath);
+    if (currentPath === nextPath) continue;
+    await env.DB.prepare(`UPDATE folder_share_links SET folder = ? WHERE token = ?`).bind(nextPath, row.token).run();
+  }
+
+  const files = await env.DB.prepare(
+    `SELECT id, key, folder, name
+     FROM files
+     WHERE (folder = ? OR folder LIKE ?)
+       AND (upload_status = 'done' OR upload_status IS NULL)`
+  ).bind(oldPath, oldPath + '/%').all<{ id: string; key: string; folder: string; name: string }>();
+
+  for (const row of files.results) {
+    const currentFolder = row.folder as string;
+    const nextFolder = remapFolderPath(currentFolder, oldPath, newPath);
+    const nextKey = buildFileKey(nextFolder, row.name as string);
+    const object = await env.VAULT_BUCKET.get(row.key as string);
+    if (object) {
+      await env.VAULT_BUCKET.put(nextKey, object.body, {
+        httpMetadata: object.httpMetadata,
+        customMetadata: object.customMetadata,
+      });
+      await env.VAULT_BUCKET.delete(row.key as string);
+    }
+    await env.DB.prepare(`UPDATE files SET folder = ?, key = ? WHERE id = ?`).bind(nextFolder, nextKey, row.id).run();
+  }
+}
+
 export async function createFolder(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ name: string; parent: string }>();
-  if (!body.name?.trim()) return error('Folder name required', 400);
-  const folderName = body.parent === 'root' ? body.name.trim() : body.parent + '/' + body.name.trim();
+  const body = await readJsonBody<{ name?: string; parent?: string }>(request);
+  const folderNamePart = normalizeFileName(typeof body?.name === 'string' ? body.name : '');
+  const parentFolder = normalizeFolderPath(typeof body?.parent === 'string' ? body.parent : 'root');
+  if (!folderNamePart) return error('Folder name required', 400);
+  if (!parentFolder) return error('Invalid parent folder', 400);
+  const folderName = parentFolder === 'root' ? folderNamePart : parentFolder + '/' + folderNamePart;
   await env.DB.prepare(`INSERT INTO folders (path, created_at) VALUES (?, ?)`).bind(folderName, new Date().toISOString()).run();
   return json({ folder: folderName }, 201);
 }
 
 export async function deleteFolder(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ folder: string }>();
-  if (!body.folder?.trim()) return error('Folder name required', 400);
-  const folder = body.folder.trim();
+  const body = await readJsonBody<{ folder?: string }>(request);
+  const folder = normalizeFolderPath(typeof body?.folder === 'string' ? body.folder : '');
+  if (!folder || folder === 'root') return error('Folder name required', 400);
   await env.DB.prepare(`DELETE FROM folders WHERE path = ?`).bind(folder).run();
   await env.DB.prepare(`DELETE FROM folder_shares WHERE folder = ?`).bind(folder).run();
   await env.DB.prepare(`DELETE FROM folder_excludes WHERE folder = ?`).bind(folder).run();
@@ -866,80 +1010,38 @@ export async function deleteFolder(request: Request, env: Env): Promise<Response
 }
 
 export async function renameFolder(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ oldName: string; newName: string }>();
-  if (!body.oldName?.trim() || !body.newName?.trim()) return error('Both old and new names required', 400);
-  const oldName = body.oldName.trim();
-  const newName = body.newName.trim();
+  const body = await readJsonBody<{ oldName?: string; newName?: string }>(request);
+  const oldName = normalizeFolderPath(typeof body?.oldName === 'string' ? body.oldName : '');
+  const newName = normalizeFolderPath(typeof body?.newName === 'string' ? body.newName : '');
+  if (!oldName || oldName === 'root' || !newName || newName === 'root') {
+    return error('Both old and new names required', 400);
+  }
   if (oldName === newName) return json({ folder: newName });
-  await env.DB.prepare(`UPDATE folders SET path = ? WHERE path = ?`).bind(newName, oldName).run();
-  const subFolders = await env.DB.prepare(`SELECT path FROM folders WHERE path LIKE ?`).bind(oldName + '/%').all();
-  for (const row of subFolders.results) {
-    const oldSub = row.path as string;
-    const newSub = newName + oldSub.slice(oldName.length);
-    await env.DB.prepare(`UPDATE folders SET path = ? WHERE path = ?`).bind(newSub, oldSub).run();
+  if (newName.startsWith(oldName + '/')) return error('Cannot move folder into its child folder', 400);
+  if (await hasIncompleteUploadsInFolderTree(env, oldName)) {
+    return error('Folder contains unfinished uploads and cannot be renamed', 409);
   }
-  const share = await env.DB.prepare(`SELECT * FROM folder_shares WHERE folder = ?`).bind(oldName).first();
-  if (share) {
-    await env.DB.prepare(`DELETE FROM folder_shares WHERE folder = ?`).bind(oldName).run();
-    await env.DB.prepare(`INSERT INTO folder_shares (folder, shared_at) VALUES (?, ?)`).bind(newName, share.shared_at).run();
-  }
-  const subShares = await env.DB.prepare(`SELECT folder, shared_at FROM folder_shares WHERE folder LIKE ?`).bind(oldName + '/%').all();
-  for (const row of subShares.results) {
-    const oldSub = row.folder as string;
-    const newSub = newName + oldSub.slice(oldName.length);
-    await env.DB.prepare(`DELETE FROM folder_shares WHERE folder = ?`).bind(oldSub).run();
-    await env.DB.prepare(`INSERT INTO folder_shares (folder, shared_at) VALUES (?, ?)`).bind(newSub, row.shared_at).run();
-  }
-  const exclude = await env.DB.prepare(`SELECT * FROM folder_excludes WHERE folder = ?`).bind(oldName).first();
-  if (exclude) {
-    await env.DB.prepare(`DELETE FROM folder_excludes WHERE folder = ?`).bind(oldName).run();
-    await env.DB.prepare(`INSERT INTO folder_excludes (folder, excluded_at) VALUES (?, ?)`).bind(newName, exclude.excluded_at).run();
-  }
-  const subExcludes = await env.DB.prepare(`SELECT folder, excluded_at FROM folder_excludes WHERE folder LIKE ?`).bind(oldName + '/%').all();
-  for (const row of subExcludes.results) {
-    const oldSub = row.folder as string;
-    const newSub = newName + oldSub.slice(oldName.length);
-    await env.DB.prepare(`DELETE FROM folder_excludes WHERE folder = ?`).bind(oldSub).run();
-    await env.DB.prepare(`INSERT INTO folder_excludes (folder, excluded_at) VALUES (?, ?)`).bind(newSub, row.excluded_at).run();
-  }
-  const linkMeta = await env.DB.prepare(`SELECT * FROM folder_share_meta WHERE folder = ?`).bind(oldName).first();
-  if (linkMeta) {
-    await env.DB.prepare(`DELETE FROM folder_share_meta WHERE folder = ?`).bind(oldName).run();
-    await env.DB.prepare(`INSERT INTO folder_share_meta (folder, token, password_hash, expires_at) VALUES (?, ?, ?, ?)`)
-      .bind(newName, linkMeta.token, linkMeta.password_hash, linkMeta.expires_at).run();
-  }
-  const subLinkMetas = await env.DB.prepare(`SELECT folder, token, password_hash, expires_at FROM folder_share_meta WHERE folder LIKE ?`).bind(oldName + '/%').all();
-  for (const row of subLinkMetas.results) {
-    const oldSub = row.folder as string;
-    const newSub = newName + oldSub.slice(oldName.length);
-    await env.DB.prepare(`DELETE FROM folder_share_meta WHERE folder = ?`).bind(oldSub).run();
-    await env.DB.prepare(`INSERT INTO folder_share_meta (folder, token, password_hash, expires_at) VALUES (?, ?, ?, ?)`)
-      .bind(newSub, row.token, row.password_hash, row.expires_at).run();
-  }
-  const files = await env.DB.prepare(
-    `SELECT id, key, folder FROM files WHERE (folder = ? OR folder LIKE ?) AND (upload_status = 'done' OR upload_status IS NULL)`
-  ).bind(oldName, oldName + '/%').all();
-  for (const row of files.results) {
-    const oldFolder = row.folder as string;
-    const newFolder = newName + oldFolder.slice(oldName.length);
-    const oldKey = row.key as string;
-    const newKey = newFolder === 'root' ? oldKey.split('/').pop()! : newFolder + '/' + oldKey.split('/').pop()!;
-    const obj = await env.VAULT_BUCKET.get(oldKey);
-    if (obj) {
-      await env.VAULT_BUCKET.put(newKey, obj.body, { httpMetadata: obj.httpMetadata, customMetadata: obj.customMetadata });
-      await env.VAULT_BUCKET.delete(oldKey);
-    }
-    await env.DB.prepare(`UPDATE files SET folder = ?, key = ? WHERE id = ?`).bind(newFolder, newKey, row.id).run();
-  }
-  await env.DB.prepare(`UPDATE files SET folder = ? WHERE folder = ? AND upload_status != 'done'`).bind(newName, oldName).run();
-  await env.DB.prepare(`UPDATE files SET folder = ? || substr(folder, ?) WHERE folder LIKE ? AND upload_status != 'done'`).bind(newName, oldName.length + 1, oldName + '/%').run();
+  if (!(await folderTreeExists(env, oldName))) return error('Folder not found', 404);
+  if (await folderTreeExists(env, newName)) return error('Target folder already exists', 409);
+  await rewriteFolderTree(env, oldName, newName);
   return json({ folder: newName });
 }
 
 // MODIFIED: 增加了文件夹统计信息
 export async function listFolders(_request: Request, env: Env): Promise<Response> {
   const folderRows = await env.DB.prepare(`SELECT path FROM folders`).all();
-  const folderSet = new Set<string>(folderRows.results.map(r => r.path as string));
+  const folderSet = new Set<string>();
+  for (const row of folderRows.results) {
+    const folder = row.path as string;
+    if (!folder) continue;
+    folderSet.add(folder);
+    const parts = folder.split('/');
+    let path = '';
+    for (let i = 0; i < parts.length - 1; i++) {
+      path = path ? path + '/' + parts[i] : parts[i];
+      folderSet.add(path);
+    }
+  }
   const fileFolders = await env.DB.prepare(
     `SELECT DISTINCT folder
      FROM files
@@ -1010,16 +1112,19 @@ export async function listFolders(_request: Request, env: Env): Promise<Response
 }
 
 export async function moveFiles(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ ids: string[]; targetFolder: string }>();
-  if (!body.ids?.length) return error('No file IDs provided', 400);
-  if (body.targetFolder === undefined) return error('Target folder required', 400);
-  const targetFolder = body.targetFolder;
+  const body = await readJsonBody<MoveFilesRequest>(request);
+  if (!body?.ids?.length) return error('No file IDs provided', 400);
+  const targetFolder = normalizeFolderPath(typeof body.targetFolder === 'string' ? body.targetFolder : '');
+  if (!targetFolder) return error('Target folder required', 400);
+  if (targetFolder !== 'root' && !(await folderTreeExists(env, targetFolder))) {
+    return error('Target folder not found', 404);
+  }
   let moved = 0;
   for (const id of body.ids) {
     const meta = await getFileById(env, id);
     if (!meta || meta.folder === targetFolder) continue;
     if (meta.uploadStatus && meta.uploadStatus !== 'done') continue;
-    const newKey = targetFolder === 'root' ? meta.name : targetFolder + '/' + meta.name;
+    const newKey = buildFileKey(targetFolder, meta.name);
     const oldObject = await env.VAULT_BUCKET.get(meta.key);
     if (!oldObject) continue;
     await env.VAULT_BUCKET.put(newKey, oldObject.body, { httpMetadata: oldObject.httpMetadata, customMetadata: oldObject.customMetadata });
@@ -1027,7 +1132,36 @@ export async function moveFiles(request: Request, env: Env): Promise<Response> {
     await env.DB.prepare(`UPDATE files SET folder = ?, key = ? WHERE id = ?`).bind(targetFolder, newKey, id).run();
     moved++;
   }
-  return json({ moved });
+  return json<MoveFilesResponse>({ moved });
+}
+
+export async function moveFolder(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody<MoveFolderRequest>(request);
+  const sourceFolder = normalizeFolderPath(typeof body?.sourceFolder === 'string' ? body.sourceFolder : '');
+  const targetFolder = normalizeFolderPath(typeof body?.targetFolder === 'string' ? body.targetFolder : '');
+
+  if (!sourceFolder || sourceFolder === 'root') return error('Source folder required', 400);
+  if (!targetFolder) return error('Target folder required', 400);
+  if (!(await folderTreeExists(env, sourceFolder))) return error('Source folder not found', 404);
+  if (targetFolder !== 'root' && !(await folderTreeExists(env, targetFolder))) {
+    return error('Target folder not found', 404);
+  }
+  if (targetFolder === sourceFolder || targetFolder.startsWith(sourceFolder + '/')) {
+    return error('Cannot move folder into itself or its child folder', 400);
+  }
+  if (await hasIncompleteUploadsInFolderTree(env, sourceFolder)) {
+    return error('Folder contains unfinished uploads and cannot be moved', 409);
+  }
+
+  const nextFolder = targetFolder === 'root'
+    ? getFolderBaseName(sourceFolder)
+    : targetFolder + '/' + getFolderBaseName(sourceFolder);
+
+  if (nextFolder === sourceFolder) return error('Source and target folder are the same', 400);
+  if (await folderTreeExists(env, nextFolder)) return error('Target folder already exists', 409);
+
+  await rewriteFolderTree(env, sourceFolder, nextFolder);
+  return json<MoveFolderResponse>({ folder: nextFolder, previousFolder: sourceFolder });
 }
 
 export async function thumbnail(request: Request, env: Env): Promise<Response> {
