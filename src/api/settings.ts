@@ -2,6 +2,7 @@ import { Env, SiteSettings, DEFAULT_SETTINGS, ResetAllDataResponse } from '../ut
 import { json, error } from '../utils/response';
 
 const SETTINGS_KEY = 'site';
+const RESET_LOCK_KEY = 'resetting';
 const EXTENSION_SPLIT_RE = /[\s,，;；、]+/;
 const EXTENSION_RE = /^\.[a-z0-9][a-z0-9._-]{0,63}$/;
 
@@ -56,6 +57,32 @@ export async function getSettings(env: Env): Promise<SiteSettings> {
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
+}
+
+export async function isResetInProgress(env: Env): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT value FROM settings WHERE key = ?`
+  ).bind(RESET_LOCK_KEY).first<{ value: string }>();
+  if (!row) return false;
+  try {
+    const lock = JSON.parse(row.value) as { until?: unknown };
+    const until = typeof lock.until === 'string' ? Date.parse(lock.until) : 0;
+    return Number.isFinite(until) && until > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+async function setResetLock(env: Env): Promise<void> {
+  const until = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  await env.DB.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).bind(RESET_LOCK_KEY, JSON.stringify({ until })).run();
+}
+
+async function clearResetLock(env: Env): Promise<void> {
+  await env.DB.prepare(`DELETE FROM settings WHERE key = ?`).bind(RESET_LOCK_KEY).run();
 }
 
 export async function handleGetSettings(request: Request, env: Env): Promise<Response> {
@@ -148,8 +175,8 @@ async function abortIncompleteMultipartUploads(env: Env): Promise<void> {
 }
 
 export async function handleResetAllData(_request: Request, env: Env): Promise<Response> {
-  await abortIncompleteMultipartUploads(env);
-  const deletedObjects = await deleteAllBucketObjects(env);
+  await setResetLock(env);
+  let deletedObjects = 0;
   const resetTables = [
     'files',
     'folders',
@@ -162,22 +189,34 @@ export async function handleResetAllData(_request: Request, env: Env): Promise<R
     'stats',
   ];
 
-  // 只重置业务数据，管理员密码和密钥来自环境变量，不在数据库里。
-  await env.DB.batch([
-    env.DB.prepare(`DELETE FROM files`),
-    env.DB.prepare(`DELETE FROM folders`),
-    env.DB.prepare(`DELETE FROM folder_shares`),
-    env.DB.prepare(`DELETE FROM folder_excludes`),
-    env.DB.prepare(`DELETE FROM folder_share_links`),
-    env.DB.prepare(`DELETE FROM folder_share_meta`),
-    env.DB.prepare(`DELETE FROM sessions`),
-    env.DB.prepare(`DELETE FROM settings`),
-    env.DB.prepare(`DELETE FROM stats`),
-    env.DB.prepare(`INSERT INTO stats (id, total_files, total_size) VALUES (1, 0, 0)`),
-  ]);
+  try {
+    await abortIncompleteMultipartUploads(env);
+    deletedObjects += await deleteAllBucketObjects(env);
 
-  return json<ResetAllDataResponse>({
-    deletedObjects,
-    resetTables,
-  });
+    // 只重置业务数据，管理员密码和密钥来自环境变量，不在数据库里。
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM files`),
+      env.DB.prepare(`DELETE FROM folders`),
+      env.DB.prepare(`DELETE FROM folder_shares`),
+      env.DB.prepare(`DELETE FROM folder_excludes`),
+      env.DB.prepare(`DELETE FROM folder_share_links`),
+      env.DB.prepare(`DELETE FROM folder_share_meta`),
+      env.DB.prepare(`DELETE FROM sessions`),
+      env.DB.prepare(`DELETE FROM settings WHERE key != ?`).bind(RESET_LOCK_KEY),
+      env.DB.prepare(`DELETE FROM stats`),
+      env.DB.prepare(`INSERT INTO stats (id, total_files, total_size) VALUES (1, 0, 0)`),
+    ]);
+
+    // 防止重置期间仍在飞行的上传请求在清桶后重新写入对象。
+    deletedObjects += await deleteAllBucketObjects(env);
+    await clearResetLock(env);
+
+    return json<ResetAllDataResponse>({
+      deletedObjects,
+      resetTables,
+    });
+  } catch (e) {
+    await clearResetLock(env);
+    throw e;
+  }
 }

@@ -2106,6 +2106,8 @@ function cloudvault() {
 
       this.settingsModal.resetting = true;
       try {
+        await this.clearClientUploadState();
+
         const res = await this.apiFetch('/api/settings/reset', {
           method: 'POST',
         });
@@ -2115,7 +2117,6 @@ function cloudvault() {
           return;
         }
 
-        await this.clearClientUploadState();
         this.resetClientDataState();
         this.settingsModal = {
           ...this.settingsModal,

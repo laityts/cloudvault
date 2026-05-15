@@ -1,10 +1,11 @@
 import { Env, FileMeta, MoveFilesRequest, MoveFilesResponse, MoveFolderRequest, MoveFolderResponse, CleanupIncompleteUploadsResponse } from '../utils/types';
 import { json, error, getMimeType, contentDispositionFilename } from '../utils/response';
 import { getSharedFolders, getExcludedFolders, isFolderShared } from './share';
-import { getAllowedUploadExtensionList, getSettings } from './settings';
+import { getAllowedUploadExtensionList, getSettings, isResetInProgress } from './settings';
 
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
 const MOVE_CONCURRENCY = 4;
+const RESET_IN_PROGRESS_MESSAGE = '系统正在重置，请稍后再上传';
 
 type MultipartPart = {
   partNumber: number;
@@ -364,6 +365,8 @@ async function updateStatsCounters(env: Env, sizeDelta: number, countDelta: numb
 }
 
 export async function upload(request: Request, env: Env): Promise<Response> {
+  if (await isResetInProgress(env)) return error(RESET_IN_PROGRESS_MESSAGE, 409);
+
   const url = new URL(request.url);
   const action = url.searchParams.get('action');
 
@@ -433,6 +436,10 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
   });
 
   if (!r2Object) return error('Upload failed', 500);
+  if (await isResetInProgress(env)) {
+    await env.VAULT_BUCKET.delete(key);
+    return error(RESET_IN_PROGRESS_MESSAGE, 409);
+  }
 
   // 计算哈希
   const objectForHash = await env.VAULT_BUCKET.get(key);
@@ -501,6 +508,12 @@ async function handleMultipartCreate(request: Request, env: Env): Promise<Respon
   const multipart = await env.VAULT_BUCKET.createMultipartUpload(key, {
     httpMetadata: { contentType, contentDisposition: 'attachment; ' + contentDispositionFilename(fileName) },
   });
+  if (await isResetInProgress(env)) {
+    try {
+      await multipart.abort();
+    } catch {}
+    return error(RESET_IN_PROGRESS_MESSAGE, 409);
+  }
 
   const id = crypto.randomUUID();
   const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
@@ -648,6 +661,10 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
 
   const multipart = env.VAULT_BUCKET.resumeMultipartUpload(body.key, body.uploadId);
   const r2Object = await multipart.complete(normalizedParts);
+  if (await isResetInProgress(env)) {
+    await env.VAULT_BUCKET.delete(body.key);
+    return error(RESET_IN_PROGRESS_MESSAGE, 409);
+  }
 
   const now = new Date().toISOString();
 

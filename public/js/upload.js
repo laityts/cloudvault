@@ -1274,11 +1274,22 @@ class UploadManager {
 
   async clearAllState() {
     for (const item of this.queue) {
+      if (item?._saveTimeout) {
+        window.clearTimeout(item._saveTimeout);
+        item._saveTimeout = null;
+      }
       if (item?.controller) {
         try {
           item.controller.abort();
         } catch {}
       }
+      if (item?.xhr) {
+        try {
+          item.xhr.abort();
+        } catch {}
+      }
+      item.controller = null;
+      item.xhr = null;
     }
 
     // 后台已清空后，本地上传缓存也要一起清掉，避免界面继续显示失效任务。
