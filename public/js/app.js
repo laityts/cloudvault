@@ -314,21 +314,38 @@ function cloudvault() {
     setupScrollPagination() {
       if (this._scrollPaginationBound) return;
       const container = this.$refs?.scrollContainer;
-      if (!container) return;
+      const checkNearBottom = (scrollTop, clientHeight, scrollHeight) => {
+        if (scrollTop + clientHeight + 220 >= scrollHeight) {
+          this.loadMore();
+        }
+      };
 
-      const onScroll = () => {
+      const scheduleCheck = (source) => {
         if (this._scrollPaginationFrame) return;
         this._scrollPaginationFrame = window.requestAnimationFrame(() => {
           this._scrollPaginationFrame = 0;
-          this.updateToolbarVisibility(container.scrollTop);
-          if (container.scrollTop + container.clientHeight + 220 >= container.scrollHeight) {
-            this.loadMore();
+          const root = document.scrollingElement || document.documentElement;
+          const useContainer = source === 'container' && container && container.scrollHeight > container.clientHeight;
+          if (useContainer) {
+            this.updateToolbarVisibility(container.scrollTop);
+            checkNearBottom(container.scrollTop, container.clientHeight, container.scrollHeight);
+            return;
           }
+
+          const pageScrollTop = root ? root.scrollTop : window.scrollY;
+          const pageClientHeight = window.innerHeight || document.documentElement.clientHeight;
+          const pageScrollHeight = root ? root.scrollHeight : document.documentElement.scrollHeight;
+          this.updateToolbarVisibility(pageScrollTop);
+          checkNearBottom(pageScrollTop, pageClientHeight, pageScrollHeight);
         });
       };
 
-      container.addEventListener('scroll', onScroll, { passive: true });
-      this.updateToolbarVisibility(container.scrollTop);
+      if (container) {
+        container.addEventListener('scroll', () => scheduleCheck('container'), { passive: true });
+        this.updateToolbarVisibility(container.scrollTop);
+      }
+      window.addEventListener('scroll', () => scheduleCheck('page'), { passive: true });
+      window.addEventListener('resize', () => this.queueViewportFillCheck(), { passive: true });
       this._scrollPaginationBound = true;
     },
 

@@ -323,6 +323,9 @@
         </div>
         
         <div x-show="loadingMore" class="load-more-indicator">正在加载更多文件...</div>
+        <div x-show="!loadingMore && hasMore" class="load-more-actions">
+          <button type="button" @click="loadMore()" class="btn-secondary text-xs">加载更多文件</button>
+        </div>
         <div x-show="hasMore" x-ref="loadMoreSentinel" class="load-more-sentinel" aria-hidden="true"></div>
       </div>
 

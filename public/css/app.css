@@ -1164,6 +1164,13 @@ html.light .file-list-shell {
   font-size: 0.85rem;
 }
 
+.load-more-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem 0 0.25rem;
+}
+
 .load-more-sentinel {
   height: 1px;
 }
