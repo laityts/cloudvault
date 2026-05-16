@@ -3214,6 +3214,9 @@ input[type="search"].search-with-icon::-webkit-search-results-decoration {
   align-items: flex-start;
   justify-content: flex-start;
   gap: 0.7rem;
+  max-height: 180px;
+  overflow: hidden;
+  transition: max-height 0.2s ease, opacity 0.18s ease, margin 0.18s ease, padding 0.18s ease, transform 0.18s ease;
 }
 
 .workspace-breadcrumbline,

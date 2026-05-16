@@ -70,7 +70,6 @@ function cloudvault() {
     _viewportFillFrame: 0,
     _remoteAssetPromises: {},
     _filesAbortController: null,
-    _lastToolbarScrollTop: 0,
     _lightboxPreloadImages: [],
     toolbarCollapsed: false,
 
@@ -349,25 +348,11 @@ function cloudvault() {
       this._scrollPaginationBound = true;
     },
 
-    // 根据滚动方向折叠顶部工具区，减少管理后台的纵向占用。
+    // 按滚动位置折叠顶部工具区，避免慢速滑动时单帧位移太小导致不隐藏。
     updateToolbarVisibility(scrollTop) {
       const top = Number.isFinite(Number(scrollTop)) ? Math.max(Number(scrollTop), 0) : 0;
-      if (top <= 16) {
-        this.toolbarCollapsed = false;
-        this._lastToolbarScrollTop = 0;
-        return;
-      }
-
-      const delta = top - this._lastToolbarScrollTop;
-      const collapseThreshold = window.innerWidth <= 768 ? 10 : 18;
-      const expandThreshold = window.innerWidth <= 768 ? -10 : -16;
-
-      if (delta > collapseThreshold) {
-        this.toolbarCollapsed = true;
-      } else if (delta < expandThreshold) {
-        this.toolbarCollapsed = false;
-      }
-      this._lastToolbarScrollTop = top;
+      const collapseThreshold = 16;
+      this.toolbarCollapsed = top > collapseThreshold;
     },
 
     queueViewportFillCheck() {
@@ -1181,7 +1166,6 @@ function cloudvault() {
       this._lastNav = now;
       const wasOnSameFolder = this.currentFolder === folder;
       this.toolbarCollapsed = false;
-      this._lastToolbarScrollTop = 0;
       this.currentFolder = folder;
       this.searchQuery = '';
       this.clearSelection();
