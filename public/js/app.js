@@ -1823,24 +1823,26 @@ function cloudvault() {
     async downloadZip() {
       const ids = [...this.selectedFiles];
       if (ids.length === 0) return;
+      const params = new URLSearchParams();
+      ids.forEach(id => params.append('id', id));
       try {
-        const res = await this.apiFetch('/api/files/zip', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids }),
-        });
-        if (!res || !res.ok) { this.showToast('下载压缩包失败', 'error'); return; }
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
+        const validateParams = new URLSearchParams(params);
+        validateParams.set('validate', '1');
+        const res = await this.apiFetch('/api/files/zip?' + validateParams.toString());
+        if (!res || !res.ok) {
+          this.showToast(await this.readApiError(res, '下载压缩包失败'), 'error');
+          return;
+        }
         const a = document.createElement('a');
-        a.href = url;
+        a.href = '/api/files/zip?' + params.toString();
         a.download = 'cloudvault-' + new Date().toISOString().slice(0, 10) + '.zip';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        this.showToast('压缩包下载成功', 'success');
-      } catch { this.showToast('下载压缩包失败', 'error'); }
+        this.showToast('已开始下载压缩包', 'success');
+      } catch {
+        this.showToast('下载压缩包失败', 'error');
+      }
     },
 
     openContextMenu(event, file) {

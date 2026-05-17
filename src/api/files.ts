@@ -7,6 +7,12 @@ const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
 const MOVE_CONCURRENCY = 4;
 const RESET_IN_PROGRESS_MESSAGE = '系统正在重置，请稍后再上传';
 const MAX_SYNC_HASH_SIZE = 32 * 1024 * 1024;
+const ZIP32_MAX_VALUE = 0xFFFFFFFF;
+const ZIP_LOCAL_HEADER_SIZE = 30;
+const ZIP_DATA_DESCRIPTOR_SIZE = 16;
+const ZIP_CENTRAL_HEADER_SIZE = 46;
+const ZIP_END_RECORD_SIZE = 22;
+const ZIP_GENERAL_PURPOSE_FLAG = 0x0808;
 
 type MultipartPart = {
   partNumber: number;
@@ -24,6 +30,19 @@ type DigestStreamConstructor = new (algorithm: HashAlgorithm) => DigestStream;
 type HashResult = {
   sha1: string;
   sha256: string;
+};
+
+type ZipSource = {
+  meta: FileMeta;
+  fileName: Uint8Array;
+  size: number;
+};
+
+type ZipCentralDirectoryEntry = {
+  fileName: Uint8Array;
+  crc: number;
+  size: number;
+  offset: number;
 };
 
 type UploadConflictResult = {
@@ -140,6 +159,199 @@ function getStoredContentType(meta: Pick<FileMeta, 'name' | 'type'>): string {
   const type = typeof meta.type === 'string' ? meta.type : '';
   if (type && type !== 'application/octet-stream') return type;
   return getMimeType(meta.name);
+}
+
+function createCrc32Table(): Uint32Array {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < table.length; i++) {
+    let crc = i;
+    for (let j = 0; j < 8; j++) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
+    }
+    table[i] = crc >>> 0;
+  }
+  return table;
+}
+
+const CRC32_TABLE = createCrc32Table();
+
+function updateCrc32(crc: number, data: Uint8Array): number {
+  let next = crc;
+  for (let i = 0; i < data.length; i++) {
+    next = CRC32_TABLE[(next ^ data[i]) & 0xFF] ^ (next >>> 8);
+  }
+  return next >>> 0;
+}
+
+function createZipLocalHeader(fileName: Uint8Array): Uint8Array {
+  const header = new Uint8Array(ZIP_LOCAL_HEADER_SIZE + fileName.length);
+  const view = new DataView(header.buffer);
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, ZIP_GENERAL_PURPOSE_FLAG, true);
+  view.setUint16(8, 0, true);
+  view.setUint16(10, 0, true);
+  view.setUint16(12, 0, true);
+  view.setUint32(14, 0, true);
+  view.setUint32(18, 0, true);
+  view.setUint32(22, 0, true);
+  view.setUint16(26, fileName.length, true);
+  view.setUint16(28, 0, true);
+  header.set(fileName, ZIP_LOCAL_HEADER_SIZE);
+  return header;
+}
+
+function createZipDataDescriptor(crc: number, size: number): Uint8Array {
+  const descriptor = new Uint8Array(ZIP_DATA_DESCRIPTOR_SIZE);
+  const view = new DataView(descriptor.buffer);
+  view.setUint32(0, 0x08074b50, true);
+  view.setUint32(4, crc, true);
+  view.setUint32(8, size, true);
+  view.setUint32(12, size, true);
+  return descriptor;
+}
+
+function createZipCentralDirectoryEntry(entry: ZipCentralDirectoryEntry): Uint8Array {
+  const cdEntry = new Uint8Array(ZIP_CENTRAL_HEADER_SIZE + entry.fileName.length);
+  const view = new DataView(cdEntry.buffer);
+  view.setUint32(0, 0x02014b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 20, true);
+  view.setUint16(8, ZIP_GENERAL_PURPOSE_FLAG, true);
+  view.setUint16(10, 0, true);
+  view.setUint16(12, 0, true);
+  view.setUint16(14, 0, true);
+  view.setUint32(16, entry.crc, true);
+  view.setUint32(20, entry.size, true);
+  view.setUint32(24, entry.size, true);
+  view.setUint16(28, entry.fileName.length, true);
+  view.setUint16(30, 0, true);
+  view.setUint16(32, 0, true);
+  view.setUint16(34, 0, true);
+  view.setUint16(36, 0, true);
+  view.setUint32(38, 0, true);
+  view.setUint32(42, entry.offset, true);
+  cdEntry.set(entry.fileName, ZIP_CENTRAL_HEADER_SIZE);
+  return cdEntry;
+}
+
+function createZipEndOfCentralDirectory(fileCount: number, centralDirectorySize: number, centralDirectoryOffset: number): Uint8Array {
+  const eocd = new Uint8Array(ZIP_END_RECORD_SIZE);
+  const view = new DataView(eocd.buffer);
+  view.setUint32(0, 0x06054b50, true);
+  view.setUint16(4, 0, true);
+  view.setUint16(6, 0, true);
+  view.setUint16(8, fileCount, true);
+  view.setUint16(10, fileCount, true);
+  view.setUint32(12, centralDirectorySize, true);
+  view.setUint32(16, centralDirectoryOffset, true);
+  view.setUint16(20, 0, true);
+  return eocd;
+}
+
+function validateZipSources(sources: ZipSource[]): string | null {
+  let dataOffset = 0;
+  let centralDirectorySize = 0;
+
+  for (const source of sources) {
+    if (source.fileName.length === 0) return '文件名无效，无法打包';
+    if (source.fileName.length > 0xFFFF) return source.meta.name + ' 文件名过长，无法打包';
+    if (!Number.isSafeInteger(source.size) || source.size < 0) return source.meta.name + ' 文件大小异常，无法打包';
+    if (source.size > ZIP32_MAX_VALUE) return source.meta.name + ' 超过 4GB，暂不支持打包下载';
+
+    dataOffset += ZIP_LOCAL_HEADER_SIZE + source.fileName.length + source.size + ZIP_DATA_DESCRIPTOR_SIZE;
+    centralDirectorySize += ZIP_CENTRAL_HEADER_SIZE + source.fileName.length;
+
+    if (dataOffset > ZIP32_MAX_VALUE || dataOffset + centralDirectorySize + ZIP_END_RECORD_SIZE > ZIP32_MAX_VALUE) {
+      return '压缩包总大小超过 4GB，暂不支持打包下载';
+    }
+  }
+
+  return null;
+}
+
+async function writeZipStream(
+  writer: WritableStreamDefaultWriter<Uint8Array>,
+  env: Env,
+  sources: ZipSource[]
+): Promise<void> {
+  const centralDirectory: ZipCentralDirectoryEntry[] = [];
+  let offset = 0;
+
+  for (const source of sources) {
+    const object = await env.VAULT_BUCKET.get(source.meta.key);
+    if (!object?.body) throw new Error(source.meta.name + ' 文件不存在或无法读取');
+
+    const localHeader = createZipLocalHeader(source.fileName);
+    const localHeaderOffset = offset;
+    await writer.write(localHeader);
+    offset += localHeader.length;
+
+    let crc = 0xFFFFFFFF;
+    let size = 0;
+    const reader = object.body.getReader();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > ZIP32_MAX_VALUE) throw new Error(source.meta.name + ' 超过 4GB，暂不支持打包下载');
+        crc = updateCrc32(crc, value);
+        await writer.write(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const finalCrc = (crc ^ 0xFFFFFFFF) >>> 0;
+    const descriptor = createZipDataDescriptor(finalCrc, size);
+    await writer.write(descriptor);
+
+    centralDirectory.push({
+      fileName: source.fileName,
+      crc: finalCrc,
+      size,
+      offset: localHeaderOffset,
+    });
+
+    offset += size + descriptor.length;
+    if (offset > ZIP32_MAX_VALUE) throw new Error('压缩包总大小超过 4GB，暂不支持打包下载');
+  }
+
+  const centralDirectoryOffset = offset;
+  let centralDirectorySize = 0;
+  for (const entry of centralDirectory) {
+    const cdEntry = createZipCentralDirectoryEntry(entry);
+    await writer.write(cdEntry);
+    centralDirectorySize += cdEntry.length;
+  }
+
+  if (centralDirectoryOffset + centralDirectorySize + ZIP_END_RECORD_SIZE > ZIP32_MAX_VALUE) {
+    throw new Error('压缩包总大小超过 4GB，暂不支持打包下载');
+  }
+
+  await writer.write(createZipEndOfCentralDirectory(
+    centralDirectory.length,
+    centralDirectorySize,
+    centralDirectoryOffset
+  ));
+  await writer.close();
+}
+
+function createZipStream(env: Env, sources: ZipSource[]): ReadableStream<Uint8Array> {
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+
+  writeZipStream(writer, env, sources).catch(async err => {
+    try {
+      await writer.abort(err);
+    } catch {}
+  }).finally(() => {
+    writer.releaseLock();
+  });
+
+  return readable;
 }
 
 function normalizeMultipartParts(parts: unknown): MultipartPart[] {
@@ -1589,9 +1801,12 @@ export async function preview(request: Request, env: Env): Promise<Response> {
 }
 
 export async function zipDownload(request: Request, env: Env): Promise<Response> {
-  const body = await readJsonBody<{ ids?: unknown }>(request);
-  const ids = Array.isArray(body?.ids)
-    ? Array.from(new Set(body.ids.filter((id): id is string => typeof id === 'string' && id.trim()).map(id => id.trim())))
+  const url = new URL(request.url);
+  const validateOnly = request.method === 'GET' && url.searchParams.get('validate') === '1';
+  const body = request.method === 'POST' ? await readJsonBody<{ ids?: unknown }>(request) : null;
+  const rawIds = request.method === 'GET' ? url.searchParams.getAll('id') : body?.ids;
+  const ids = Array.isArray(rawIds)
+    ? Array.from(new Set(rawIds.filter((id): id is string => typeof id === 'string' && id.trim()).map(id => id.trim())))
     : [];
   if (ids.length === 0) return error('No file IDs provided', 400);
   if (ids.length > 100) return error('Max 100 files per zip', 400);
@@ -1603,6 +1818,11 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
   if (fileMetas.length === 0) return error('No valid files found', 404);
   if (fileMetas.length === 1) {
     const meta = fileMetas[0];
+    if (validateOnly) {
+      const head = await env.VAULT_BUCKET.head(meta.key);
+      if (!head) return error('File not found in storage', 404);
+      return json({ ok: true });
+    }
     const object = await env.VAULT_BUCKET.get(meta.key);
     if (!object) return error('File not found in storage', 404);
     const headers = new Headers();
@@ -1612,86 +1832,27 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
     return new Response(object.body, { headers });
   }
   const encoder = new TextEncoder();
-  const parts: Uint8Array[] = [];
-  const centralDir: Uint8Array[] = [];
-  let offset = 0;
-  function crc32(data: Uint8Array): number {
-    let crc = 0xFFFFFFFF;
-    for (let i = 0; i < data.length; i++) {
-      crc ^= data[i];
-      for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
-    }
-    return (crc ^ 0xFFFFFFFF) >>> 0;
+  const sources: ZipSource[] = fileMetas.map(meta => ({
+    meta,
+    fileName: encoder.encode(meta.name),
+    size: Number(meta.size),
+  }));
+
+  for (const source of sources) {
+    const object = await env.VAULT_BUCKET.head(source.meta.key);
+    if (!object) return error(source.meta.name + ' 文件不存在或无法读取', 404);
+    source.size = Number(object.size);
   }
-  for (const meta of fileMetas) {
-    const object = await env.VAULT_BUCKET.get(meta.key);
-    if (!object) continue;
-    const fileData = new Uint8Array(await object.arrayBuffer());
-    const fileName = encoder.encode(meta.name);
-    const crc = crc32(fileData);
-    const localHeader = new Uint8Array(30 + fileName.length);
-    const lv = new DataView(localHeader.buffer);
-    lv.setUint32(0, 0x04034b50, true);
-    lv.setUint16(4, 20, true);
-    lv.setUint16(6, 0, true);
-    lv.setUint16(8, 0, true);
-    lv.setUint16(10, 0, true);
-    lv.setUint16(12, 0, true);
-    lv.setUint32(14, crc, true);
-    lv.setUint32(18, fileData.length, true);
-    lv.setUint32(22, fileData.length, true);
-    lv.setUint16(26, fileName.length, true);
-    lv.setUint16(28, 0, true);
-    localHeader.set(fileName, 30);
-    const cdEntry = new Uint8Array(46 + fileName.length);
-    const cv = new DataView(cdEntry.buffer);
-    cv.setUint32(0, 0x02014b50, true);
-    cv.setUint16(4, 20, true);
-    cv.setUint16(6, 20, true);
-    cv.setUint16(8, 0, true);
-    cv.setUint16(10, 0, true);
-    cv.setUint16(12, 0, true);
-    cv.setUint16(14, 0, true);
-    cv.setUint32(16, crc, true);
-    cv.setUint32(20, fileData.length, true);
-    cv.setUint32(24, fileData.length, true);
-    cv.setUint16(28, fileName.length, true);
-    cv.setUint16(30, 0, true);
-    cv.setUint16(32, 0, true);
-    cv.setUint16(34, 0, true);
-    cv.setUint16(36, 0, true);
-    cv.setUint32(38, 0, true);
-    cv.setUint32(42, offset, true);
-    cdEntry.set(fileName, 46);
-    parts.push(localHeader);
-    parts.push(fileData);
-    centralDir.push(cdEntry);
-    offset += localHeader.length + fileData.length;
-  }
-  let cdSize = 0;
-  for (const cd of centralDir) cdSize += cd.length;
-  const eocd = new Uint8Array(22);
-  const ev = new DataView(eocd.buffer);
-  ev.setUint32(0, 0x06054b50, true);
-  ev.setUint16(4, 0, true);
-  ev.setUint16(6, 0, true);
-  ev.setUint16(8, centralDir.length, true);
-  ev.setUint16(10, centralDir.length, true);
-  ev.setUint32(12, cdSize, true);
-  ev.setUint32(16, offset, true);
-  ev.setUint16(20, 0, true);
-  let totalSize = offset + cdSize + 22;
-  const zipBuffer = new Uint8Array(totalSize);
-  let pos = 0;
-  for (const part of parts) { zipBuffer.set(part, pos); pos += part.length; }
-  for (const cd of centralDir) { zipBuffer.set(cd, pos); pos += cd.length; }
-  zipBuffer.set(eocd, pos);
+
+  const invalidReason = validateZipSources(sources);
+  if (invalidReason) return error(invalidReason, 413);
+  if (validateOnly) return json({ ok: true });
+
   const zipName = 'cloudvault-' + new Date().toISOString().slice(0, 10) + '.zip';
-  return new Response(zipBuffer, {
+  return new Response(createZipStream(env, sources), {
     headers: {
       'Content-Type': 'application/zip',
       'Content-Disposition': 'attachment; filename="' + zipName + '"',
-      'Content-Length': String(totalSize),
     },
   });
 }

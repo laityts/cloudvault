@@ -211,7 +211,7 @@ async function handleApiRoutes(
   const fileDownloadMatch = path.match(/^\/api\/files\/([^/]+)\/download$/);
   if (fileDownloadMatch && method === 'GET') return files.download(request, env);
 
-  if (path === '/api/files/zip' && method === 'POST') return files.zipDownload(request, env);
+  if (path === '/api/files/zip' && (method === 'GET' || method === 'POST')) return files.zipDownload(request, env);
 
   // 文件夹
   if (path === '/api/folders' && method === 'GET') return files.listFolders(request, env);
