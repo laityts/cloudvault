@@ -131,6 +131,8 @@ class UploadManager {
       errorMessage: typeof item.errorMessage === 'string' ? item.errorMessage : '',
       lastModified: Number.isFinite(Number(item.lastModified)) ? Number(item.lastModified) : null,
       relativePath: this.normalizeRelativePath(item.relativePath, typeof item.name === 'string' ? item.name : 'untitled'),
+      hasStartedUpload: item.hasStartedUpload === true,
+      isFinalizing: false,
     };
 
     if (normalized.status === 'uploading') {
@@ -146,6 +148,7 @@ class UploadManager {
       normalized.uploadedBytes = normalized.size;
       normalized.retryCount = 0;
       normalized.errorMessage = '';
+      normalized.hasStartedUpload = false;
     } else if (!normalized.file && normalized.status !== 'cancelled') {
       normalized.status = 'needs_file';
     }
@@ -162,6 +165,7 @@ class UploadManager {
     delete copy.progressUpdateCounter;
     delete copy.speedSamples;
     delete copy._saveTimeout;
+    delete copy.isFinalizing;
     if (!includeFile) delete copy.file;
     return copy;
   }
@@ -256,6 +260,7 @@ class UploadManager {
         item.key = null;
         item.fileId = null;
         item.chunks = [];
+        item.hasStartedUpload = false;
         await this.saveToStorage(item);
         return;
       }
@@ -264,6 +269,9 @@ class UploadManager {
       item.key = typeof data.key === 'string' && data.key ? data.key : item.key;
       item.fileId = typeof data.fileId === 'string' && data.fileId ? data.fileId : item.fileId;
       item.chunks = this.normalizeParts(data.chunks);
+      if (item.uploadId || item.fileId || item.chunks.length > 0) {
+        item.hasStartedUpload = true;
+      }
 
       const totalParts = Number.isFinite(Number(data.totalChunks))
         ? Number(data.totalChunks)
@@ -385,6 +393,34 @@ class UploadManager {
     error.terminalUpload = true;
     error.payload = payload || null;
     return error;
+  }
+
+  isFinishingUpload(item) {
+    const size = Number(item?.size);
+    const uploadedBytes = Number(item?.uploadedBytes);
+    return item?.isFinalizing === true ||
+      (Number.isFinite(size) && size > 0 && Number.isFinite(uploadedBytes) && uploadedBytes >= size);
+  }
+
+  isExistingUploadedFileForStartedTask(item, payload) {
+    const uploadedFile = payload?.file;
+    if (!item || !uploadedFile || payload?.exists !== true) return false;
+
+    const hasStartedUpload = item.hasStartedUpload === true ||
+      Boolean(item.uploadId || item.fileId) ||
+      this.normalizeParts(item.chunks).length > 0 ||
+      (Number.isFinite(Number(item.uploadedBytes)) && Number(item.uploadedBytes) > 0);
+    if (!hasStartedUpload) return false;
+
+    const uploadedSize = Number(uploadedFile.size);
+    if (!Number.isFinite(uploadedSize) || uploadedSize !== Number(item.size)) return false;
+    const itemFolder = this.normalizeFolder(item.folder);
+    const itemKey = itemFolder === 'root' ? item.name : itemFolder + '/' + item.name;
+    if (typeof uploadedFile.key !== 'string' || uploadedFile.key !== itemKey) return false;
+    if (typeof uploadedFile.name !== 'string' || uploadedFile.name !== item.name) return false;
+    if (typeof uploadedFile.folder !== 'string' || this.normalizeFolder(uploadedFile.folder) !== itemFolder) return false;
+
+    return true;
   }
 
   async readResponsePayload(response) {
@@ -558,6 +594,8 @@ class UploadManager {
         uploadId: null,
         key: null,
         fileId: null,
+        hasStartedUpload: false,
+        isFinalizing: false,
         controller: null,
         xhr: null,
         createdAt: Date.now(),
@@ -682,6 +720,8 @@ class UploadManager {
     item.key = null;
     item.fileId = null;
     item.chunks = [];
+    item.hasStartedUpload = false;
+    item.isFinalizing = false;
     item.controller = null;
     item.xhr = null;
     if (item._saveTimeout) {
@@ -709,6 +749,7 @@ class UploadManager {
     item.speedSamples = [];
     item.lastUpdate = null;
     item.lastLoaded = item.uploadedBytes || 0;
+    item.isFinalizing = false;
 
     try {
       if (item.uploadId && item.fileId) {
@@ -733,6 +774,8 @@ class UploadManager {
       if (item.size < SMALL_FILE_THRESHOLD) {
         item.uploadedBytes = 0;
         item.progress = 0;
+        item.hasStartedUpload = true;
+        await this.saveToStorage(item);
         await this.directUpload(item);
       } else {
         await this.multipartUpload(item);
@@ -754,6 +797,7 @@ class UploadManager {
 
       if (error?.name === 'AbortError') {
         item.status = 'paused';
+        item.isFinalizing = false;
         item.controller = null;
         item.xhr = null;
         item.speed = 0;
@@ -765,6 +809,13 @@ class UploadManager {
       }
 
       if (error?.skipUpload) {
+        // 暂停或断网时服务端可能已经落库，恢复遇到同一目标文件时应收敛为完成态。
+        if (this.isExistingUploadedFileForStartedTask(item, error.payload)) {
+          await this.finalizeCompletedUpload(item);
+          return;
+        }
+
+        item.isFinalizing = false;
         item.controller = null;
         item.xhr = null;
         item.speed = 0;
@@ -780,6 +831,7 @@ class UploadManager {
 
       if (error?.terminalUpload) {
         item.status = 'error';
+        item.isFinalizing = false;
         item.controller = null;
         item.xhr = null;
         item.speed = 0;
@@ -796,6 +848,7 @@ class UploadManager {
 
       item.retryCount = (item.retryCount || 0) + 1;
       item.errorMessage = error?.message || '上传失败';
+      item.isFinalizing = false;
       item.controller = null;
       item.xhr = null;
       item.speed = 0;
@@ -910,6 +963,7 @@ class UploadManager {
     item.chunks = [];
     item.uploadedBytes = 0;
     item.progress = 0;
+    item.hasStartedUpload = true;
     await this.saveToStorage(item);
   }
 
@@ -1011,7 +1065,9 @@ class UploadManager {
     );
 
     await Promise.all(workers);
+    item.isFinalizing = true;
     await this.updateServerProgress(item);
+    await this.saveToStorage(item);
 
     const response = await fetch('/api/files/upload?action=mpu-complete', {
       method: 'POST',
@@ -1030,6 +1086,7 @@ class UploadManager {
       const text = await response.text().catch(() => '');
       throw new Error(text || '合并分片失败');
     }
+    item.isFinalizing = false;
   }
 
   async updateServerProgress(item) {
@@ -1110,6 +1167,11 @@ class UploadManager {
     if (!item) return;
 
     if (item.status === 'uploading') {
+      if (this.isFinishingUpload(item)) {
+        this.dispatch('upload-queue-changed');
+        return;
+      }
+
       const controller = item.controller;
       item.status = 'pausing';
       item.speed = 0;
