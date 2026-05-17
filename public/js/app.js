@@ -90,6 +90,10 @@ function cloudvault() {
       return this.allUploads.some(u => u.status === 'paused' || u.status === 'error');
     },
 
+    get canToggleAllUploads() {
+      return this.anyResumableUploads || this.anyPendingOrUploading;
+    },
+
     get anyNeedsFile() {
       return this.allUploads.some(u => u.status === 'needs_file');
     },
@@ -100,6 +104,21 @@ function cloudvault() {
 
     get hasIncompleteUploads() {
       return this.incompleteUploadCount > 0;
+    },
+
+    get activeUploadFileIds() {
+      return this.allUploads
+        .filter(u => u && (u.status === 'uploading' || u.status === 'pausing'))
+        .map(u => u.fileId)
+        .filter(id => typeof id === 'string' && id);
+    },
+
+    get cleanableUploadCount() {
+      return this.allUploads.filter(u =>
+        u &&
+        u.status !== 'uploading' &&
+        u.status !== 'pausing'
+      ).length;
     },
 
     get storageLimitBytes() {
@@ -530,6 +549,11 @@ function cloudvault() {
     pauseAllUploads() {
       if (!window.UploadManager) return;
       window.UploadManager.pauseAllUploads();
+    },
+    toggleAllUploads() {
+      if (!window.UploadManager) return;
+      if (this.anyResumableUploads) window.UploadManager.resumeAllUploads();
+      else window.UploadManager.pauseAllUploads();
     },
     cancelAllUploads() {
       if (!window.UploadManager) return;
@@ -2369,33 +2393,32 @@ function cloudvault() {
       if (!window.UploadManager) return;
       window.UploadManager.retryFailed(id);
     },
-    clearCompletedUploads() {
-      if (!window.UploadManager) return;
-      window.UploadManager.clearCompleted();
-    },
-    async cleanupIncompleteUploads() {
+    async cleanupUploadItems() {
       if (this.uploadCleanupRunning) return;
 
-      const confirmed = window.confirm('确定清理所有未完成任务吗？这会移除本地上传队列，并清除数据库中的未完成上传记录。即使本地列表为空，也会尝试清理数据库残留。');
+      const confirmed = window.confirm('确定清理未完成项和完成项吗？上传中的任务不会清理。即使本地列表为空，也会尝试清理数据库残留。');
       if (!confirmed) return;
 
-      const localIncompleteCount = this.incompleteUploadCount;
+      const localCleanableCount = this.cleanableUploadCount;
       let localClearedCount = 0;
+      const activeUploadFileIds = this.activeUploadFileIds;
 
       this.uploadCleanupRunning = true;
       try {
-        if (window.UploadManager && typeof window.UploadManager.clearIncompleteState === 'function') {
-          localClearedCount = await window.UploadManager.clearIncompleteState();
+        if (window.UploadManager && typeof window.UploadManager.clearInactiveState === 'function') {
+          localClearedCount = await window.UploadManager.clearInactiveState();
         }
 
         const res = await this.apiFetch('/api/files/upload?action=cleanup-incomplete', {
           method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keepIds: activeUploadFileIds }),
         });
         this.syncUploadsFromManager();
 
         if (!res || !res.ok) {
           const message = await this.readApiError(res, '服务器未完成任务清理失败');
-          const prefix = localClearedCount > 0 ? '本地未完成任务已清理，' : '';
+          const prefix = localClearedCount > 0 ? '本地任务已清理，' : '';
           this.showToast(prefix + message, 'error');
           return;
         }
@@ -2403,14 +2426,14 @@ function cloudvault() {
         const data = await res.json().catch(() => null);
         const deletedTasks = Number.isFinite(Number(data?.deletedTasks)) ? Number(data.deletedTasks) : 0;
         const abortedMultipartUploads = Number.isFinite(Number(data?.abortedMultipartUploads)) ? Number(data.abortedMultipartUploads) : 0;
-        if ((localClearedCount || localIncompleteCount) === 0 && deletedTasks === 0) {
-          this.showToast('没有检测到需要清理的未完成任务', 'info');
+        if ((localClearedCount || localCleanableCount) === 0 && deletedTasks === 0) {
+          this.showToast('没有检测到需要清理的任务', 'info');
           return;
         }
-        const clearedLocalCount = localClearedCount || localIncompleteCount;
+        const clearedLocalCount = localClearedCount || localCleanableCount;
         const localSummary = clearedLocalCount > 0
-          ? '已清理 ' + clearedLocalCount + ' 个本地未完成任务'
-          : '本地没有残留未完成任务';
+          ? '已清理 ' + clearedLocalCount + ' 个本地任务'
+          : '本地没有可清理任务';
         const serverSummary = deletedTasks > 0
           ? '，数据库清理 ' + deletedTasks + ' 条记录'
           : '，数据库没有残留未完成记录';
@@ -2420,7 +2443,7 @@ function cloudvault() {
         this.showToast(localSummary + serverSummary + multipartSummary, 'success');
       } catch {
         this.syncUploadsFromManager();
-        const prefix = localClearedCount > 0 ? '本地未完成任务已清理，' : '';
+        const prefix = localClearedCount > 0 ? '本地任务已清理，' : '';
         this.showToast(prefix + '服务器未完成任务清理失败', 'error');
       } finally {
         this.uploadCleanupRunning = false;

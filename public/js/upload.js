@@ -1262,11 +1262,17 @@ class UploadManager {
     this.dispatch('upload-queue-changed');
   }
 
-  async clearIncompleteState() {
-    const removableItems = this.queue.filter(item => item.status !== 'done' && item.status !== 'cancelled');
+  async clearInactiveState() {
+    const removableItems = this.queue.filter(item =>
+      item.status !== 'uploading' &&
+      item.status !== 'pausing'
+    );
     if (removableItems.length === 0) return 0;
 
-    this.queue = this.queue.filter(item => item.status === 'done' || item.status === 'cancelled');
+    this.queue = this.queue.filter(item =>
+      item.status === 'uploading' ||
+      item.status === 'pausing'
+    );
 
     for (const item of removableItems) {
       if (item?._saveTimeout) {
@@ -1292,6 +1298,10 @@ class UploadManager {
 
     this.dispatch('upload-queue-changed');
     return removableItems.length;
+  }
+
+  async clearIncompleteState() {
+    return this.clearInactiveState();
   }
 
   async clearAllState() {

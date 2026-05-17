@@ -748,7 +748,7 @@ export async function upload(request: Request, env: Env): Promise<Response> {
     return handleMultipartProgress(request, env);
   }
   if (action === 'cleanup-incomplete') {
-    return handleCleanupIncompleteUploads(env);
+    return handleCleanupIncompleteUploads(request, env);
   }
 
   return handleDirectUpload(request, env);
@@ -1136,8 +1136,19 @@ async function listIncompleteUploadRows(env: Env): Promise<IncompleteUploadRow[]
     : [];
 }
 
-async function handleCleanupIncompleteUploads(env: Env): Promise<Response> {
-  const rows = await listIncompleteUploadRows(env);
+function normalizeKeepUploadIds(ids: unknown): string[] {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(new Set(ids
+    .filter((id): id is string => typeof id === 'string' && id.trim())
+    .map(id => id.trim())
+  ));
+}
+
+async function handleCleanupIncompleteUploads(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody<{ keepIds?: unknown }>(request);
+  const keepIds = normalizeKeepUploadIds(body?.keepIds);
+  const keepIdSet = new Set(keepIds);
+  const rows = (await listIncompleteUploadRows(env)).filter(row => !keepIdSet.has(row.id));
   let abortedMultipartUploads = 0;
 
   // 先尝试中止远端 multipart，会比单删数据库记录更干净，避免残留未提交分片。
@@ -1152,11 +1163,14 @@ async function handleCleanupIncompleteUploads(env: Env): Promise<Response> {
     }
   });
 
-  await env.DB.prepare(
-    `DELETE FROM files
-     WHERE upload_status IS NOT NULL
-       AND upload_status != 'done'`
-  ).run();
+  await runWithConcurrency(rows, MOVE_CONCURRENCY, async row => {
+    await env.DB.prepare(
+      `DELETE FROM files
+       WHERE id = ?
+         AND upload_status IS NOT NULL
+         AND upload_status != 'done'`
+    ).bind(row.id).run();
+  });
 
   return json<CleanupIncompleteUploadsResponse>({
     deletedTasks: rows.length,

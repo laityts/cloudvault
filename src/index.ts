@@ -190,6 +190,7 @@ async function handleApiRoutes(
   if (path === '/api/files' && method === 'GET') return files.list(request, env);
   if (path === '/api/files/upload' && (method === 'GET' || method === 'POST' || method === 'PUT' || method === 'DELETE')) return files.upload(request, env);
   if (path === '/api/files/delete' && method === 'POST') return files.deleteFiles(request, env);
+  if (path === '/api/files/zip' && (method === 'GET' || method === 'POST')) return files.zipDownload(request, env);
 
   const filesMatch = path.match(/^\/api\/files\/([^/]+)$/);
   if (filesMatch) {
@@ -210,8 +211,6 @@ async function handleApiRoutes(
 
   const fileDownloadMatch = path.match(/^\/api\/files\/([^/]+)\/download$/);
   if (fileDownloadMatch && method === 'GET') return files.download(request, env);
-
-  if (path === '/api/files/zip' && (method === 'GET' || method === 'POST')) return files.zipDownload(request, env);
 
   // 文件夹
   if (path === '/api/folders' && method === 'GET') return files.listFolders(request, env);
