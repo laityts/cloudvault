@@ -16,10 +16,11 @@
       "bucket_name": "cloudvault-files"
     }
   ],
-  "kv_namespaces": [
+  "d1_databases": [
     {
-      "binding": "VAULT_KV",
-      "id": "YOUR_KV_NAMESPACE_ID"
+      "binding": "VAULT_DB",
+      "database_name": "cloudvault",
+      "database_id": "<your-d1-database-id>"
     }
   ],
   "observability": {

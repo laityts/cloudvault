@@ -1,7 +1,7 @@
 // ─── Environment Bindings ─────────────────────────────────────────────
 export interface Env {
   VAULT_BUCKET: R2Bucket;
-  VAULT_KV: KVNamespace;
+  VAULT_DB: D1Database;
   ASSETS: Fetcher;
   ADMIN_PASSWORD: string;   // wrangler secret
   SESSION_SECRET: string;   // wrangler secret
@@ -86,15 +86,3 @@ export const DEFAULT_SETTINGS: SiteSettings = {
   siteName: 'CloudVault',
   siteIconUrl: '',
 };
-
-// ─── KV Key Patterns ─────────────────────────────────────────────────
-export const KV_PREFIX = {
-  FILE: 'file:',
-  SHARE: 'share:',
-  FOLDER_SHARE: 'foldershare:',
-  FOLDER_SHARE_EXCLUDE: 'foldershare-exclude:',
-  FOLDER_SHARE_LINK: 'foldersharelink:',
-  SESSION: 'session:',
-  STATS: 'stats:',
-  SETTINGS: 'settings:',
-} as const;
