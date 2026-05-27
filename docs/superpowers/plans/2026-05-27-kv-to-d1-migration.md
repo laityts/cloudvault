@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将 CloudVault Worker 9 类 KV 数据全部迁移至 Cloudflare D1，采用一次性硬切、不迁存量、范式化 8 张表、新增 `src/db/` 抽象层。
+**Goal:** 将 CloudVault Worker 9 类 KV 数据全部迁移至 Cloudflare D1，采用一次性硬切、不迁存量、范式化 7 张表（share:<token> 反查合并入 files.share_token UNIQUE 索引）、新增 `src/db/` 抽象层。
 
 **Architecture:** 业务层（`api/`、`handlers/`、`auth.ts`）只调用 `src/db/<entity>.ts` 中的纯函数；`src/db/` 层封装所有 D1 prepared statement 与行/对象映射，不写业务逻辑。Session 用懒删除 + 1% 概率机会性批量清理。Stats 全部走聚合 SQL，删除累加计数器。
 
@@ -143,7 +143,7 @@ Run:
 npx wrangler d1 execute cloudvault --remote --command="SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
 ```
 
-Expected: 输出包含 8 张表：files, folder_share_excludes, folder_share_links, folder_shares, folders, sessions, settings（外加 sqlite_* 系统表可忽略）。
+Expected: 输出包含 7 张表：files, folder_share_excludes, folder_share_links, folder_shares, folders, sessions, settings（外加 _cf_* / sqlite_* 系统表可忽略）。
 
 - [ ] **Step 5: Commit**
 
