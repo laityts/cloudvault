@@ -94,7 +94,7 @@ export default {
       }
 
       if (path === '/admin' && method === 'GET') {
-        const authResponse = await authMiddleware(request, env);
+        const authResponse = await authMiddleware(request, env, ctx);
         if (authResponse) return authResponse;
         const adminSettings = await getSettings(env);
         let dashHtml = await fetchAssetHtml(env.ASSETS, request.url, '/dashboard.html');
@@ -105,7 +105,7 @@ export default {
       }
 
       if (path.startsWith('/api/')) {
-        const authResponse = await authMiddleware(request, env);
+        const authResponse = await authMiddleware(request, env, ctx);
         if (authResponse) return authResponse;
         return await handleApiRoutes(request, env, url, path, method);
       }
@@ -120,7 +120,7 @@ export default {
         if (cleanResponse) return cleanResponse;
       }
 
-      const isAuth = await validateSession(request, env);
+      const isAuth = await validateSession(request, env, ctx);
       if (isAuth) return env.ASSETS.fetch(request);
 
       return await serve404Page(request, env);
