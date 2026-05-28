@@ -236,6 +236,12 @@ const Row: Component<{
               <span class="text-fg-subtle">·</span>
               <span class="tabular text-fg-subtle">{props.item.progress}%</span>
             </Show>
+            <Show when={!isFinished() && props.item.resumable && props.item.partsTotal > 1}>
+              <span class="text-fg-subtle">·</span>
+              <span class="tabular text-fg-subtle">
+                {props.item.partsDone}/{props.item.partsTotal} 片
+              </span>
+            </Show>
             <Show when={props.item.status === 'error' && props.item.error}>
               <span class="text-fg-subtle">·</span>
               <span class="truncate text-fg-subtle" title={props.item.error}>

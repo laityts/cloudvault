@@ -19,6 +19,10 @@ export interface UploadItem {
   resumable: boolean;
   /** 刷新后从 sessionStorage 重建、需要用户重新选择文件才能继续 */
   needsReselect: boolean;
+  /** multipart 总分片数（resumable=true 才有意义） */
+  partsTotal: number;
+  /** 已成功上传的分片数（来自 InternalState.completedParts） */
+  partsDone: number;
 }
 
 interface InternalState {
@@ -39,8 +43,12 @@ interface InternalState {
 type Listener = (state: UploadItem[]) => void;
 
 const CHUNK_SIZE = 5 * 1024 * 1024;
+/** 同时上传的"文件数"上限。文件之间并发。 */
 const MAX_CONCURRENT = 3;
-const DIRECT_LIMIT = 10 * 1024 * 1024;
+/** 单个文件内同时并发上传的 parts 数。R2 按 partNumber 排序，所以顺序无所谓。 */
+const PART_CONCURRENCY = 4;
+/** 小于一片（5MB）的文件走单次 PUT；其余走 multipart 享受并发 + 续传。 */
+const DIRECT_LIMIT = CHUNK_SIZE;
 const STORAGE_KEY = 'cv-upload-queue';
 
 let _idCounter = 0;
@@ -102,6 +110,7 @@ export class UploadManager {
     if (!Array.isArray(persisted)) return;
 
     for (const p of persisted) {
+      const partsTotal = p.resumable ? Math.ceil(p.fileSize / CHUNK_SIZE) : 1;
       const item: UploadItem = {
         id: p.id,
         file: undefined,
@@ -113,6 +122,8 @@ export class UploadManager {
         resumable: p.resumable,
         needsReselect: true,
         error: 'reselect',
+        partsTotal,
+        partsDone: (p.completedParts ?? []).length,
       };
       this.queue.push(item);
       const state: InternalState = {
@@ -209,6 +220,7 @@ export class UploadManager {
   addFiles(files: Iterable<File>, folder: string): UploadItem[] {
     const added: UploadItem[] = [];
     for (const file of files) {
+      const resumable = file.size >= DIRECT_LIMIT;
       const item: UploadItem = {
         id: `u${++_idCounter}-${file.name}`,
         file,
@@ -217,8 +229,10 @@ export class UploadManager {
         folder: folder || 'root',
         progress: 0,
         status: 'pending',
-        resumable: file.size >= DIRECT_LIMIT,
+        resumable,
         needsReselect: false,
+        partsTotal: resumable ? Math.ceil(file.size / CHUNK_SIZE) : 1,
+        partsDone: 0,
       };
       this.queue.push(item);
       this.intern(item.id);
@@ -542,33 +556,59 @@ export class UploadManager {
     const totalParts = Math.ceil(file.size / CHUNK_SIZE);
     const doneSet = new Set(state.completedParts.map((p) => p.partNumber));
 
+    // 把还没上传的 partNumber 收集成队列，PART_CONCURRENCY 个 worker 同时从队列拉。
+    const queue: number[] = [];
     for (let i = 0; i < totalParts; i++) {
       const partNumber = i + 1;
-      if (doneSet.has(partNumber)) continue;
-      // 在每片之间检查暂停/取消
-      if (state.paused || state.canceled) throw new Error('Aborted');
-
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunk = file.slice(start, end);
-      const part = await multipartUploadPart({
-        uploadId: state.uploadId,
-        key: state.key,
-        partNumber,
-        chunk,
-        signal: state.abort?.signal,
-      });
-      state.completedParts.push(part);
-      item.progress = Math.round((state.completedParts.length / totalParts) * 100);
-      this.emit();
+      if (!doneSet.has(partNumber)) queue.push(partNumber);
     }
+    let nextIdx = 0;
+    let firstError: unknown = null;
+    const uploadId = state.uploadId;
+    const key = state.key;
+
+    const worker = async () => {
+      while (true) {
+        if (state.paused || state.canceled || firstError) return;
+        const i = nextIdx++;
+        if (i >= queue.length) return;
+        const partNumber = queue[i]!;
+        const start = (partNumber - 1) * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+        try {
+          const part = await multipartUploadPart({
+            uploadId,
+            key,
+            partNumber,
+            chunk,
+            signal: state.abort?.signal,
+          });
+          state.completedParts.push(part);
+          item.partsDone = state.completedParts.length;
+          item.progress = Math.round((state.completedParts.length / totalParts) * 100);
+          this.emit();
+        } catch (e) {
+          if (state.paused || state.canceled) return;
+          if (!firstError) firstError = e;
+          return;
+        }
+      }
+    };
+
+    const workers: Promise<void>[] = [];
+    for (let i = 0; i < Math.min(PART_CONCURRENCY, queue.length); i++) {
+      workers.push(worker());
+    }
+    await Promise.all(workers);
 
     if (state.paused || state.canceled) throw new Error('Aborted');
+    if (firstError) throw firstError instanceof Error ? firstError : new Error(String(firstError));
 
     // parts 顺序无所谓 —— Cloudflare R2 按 partNumber 排序拼接
     await multipartComplete({
-      uploadId: state.uploadId,
-      key: state.key,
+      uploadId,
+      key,
       parts: state.completedParts,
       signal: state.abort?.signal,
     });
