@@ -541,7 +541,7 @@ function DashboardApp() {
               }
             >
               <Show
-                when={store.filteredFiles().length > 0}
+                when={store.filteredFiles().length > 0 || store.currentSubfolders().length > 0}
                 fallback={
                   <EmptyState
                     icon={<IconFile size={36} />}
@@ -555,17 +555,21 @@ function DashboardApp() {
                   fallback={
                     <FileTable
                       files={store.filteredFiles()}
+                      subfolders={store.currentSubfolders()}
                       store={store}
                       onPreview={onPreviewFile}
                       onMore={(e, f) => fileMenu.open(e, f)}
+                      onFolderMore={(e, folder) => folderMenu.open(e, folder)}
                     />
                   }
                 >
                   <FileGrid
                     files={store.filteredFiles()}
+                    subfolders={store.currentSubfolders()}
                     store={store}
                     onPreview={onPreviewFile}
                     onMore={(e, f) => fileMenu.open(e, f)}
+                    onFolderMore={(e, folder) => folderMenu.open(e, folder)}
                   />
                 </Show>
               </Show>

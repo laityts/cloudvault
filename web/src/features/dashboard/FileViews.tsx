@@ -2,20 +2,33 @@ import { For, Show, type Component } from 'solid-js';
 import { cn } from '~/lib/cn';
 import { fileCategory } from '~/lib/fileKind';
 import { formatBytes, formatRelativeDate } from '~/lib/format';
-import { FileIcon, IconCheck, IconLink, IconChevronUp, IconChevronDown, IconMoreVertical } from '~/ui';
-import type { FileMeta } from '~/api/types';
+import { FileIcon, IconCheck, IconLink, IconChevronUp, IconChevronDown, IconMoreVertical, IconChevronRight, IconShare } from '~/ui';
+import type { FileMeta, FolderInfo } from '~/api/types';
 import type { DashboardStore, SortKey } from './store';
 import { longpress } from '~/lib/longpress';
 
 void longpress; // keep import side-effect for `use:longpress`
 
+const folderLabel = (path: string) => path.split('/').pop() || path;
+
 export const FileGrid: Component<{
   files: FileMeta[];
+  subfolders?: FolderInfo[];
   store: DashboardStore;
   onPreview: (f: FileMeta) => void;
   onMore: (e: MouseEvent, f: FileMeta) => void;
+  onFolderMore?: (e: MouseEvent, folder: FolderInfo) => void;
 }> = (props) => (
   <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+    <For each={props.subfolders ?? []}>
+      {(folder) => (
+        <FolderCard
+          folder={folder}
+          onOpen={() => props.store.setCurrentFolder(folder.name)}
+          onMore={props.onFolderMore ? (e) => props.onFolderMore!(e, folder) : undefined}
+        />
+      )}
+    </For>
     <For each={props.files}>
       {(f) => (
         <FileCard
@@ -26,6 +39,65 @@ export const FileGrid: Component<{
         />
       )}
     </For>
+  </div>
+);
+
+const FolderCard: Component<{
+  folder: FolderInfo;
+  onOpen: () => void;
+  onMore?: (e: MouseEvent) => void;
+}> = (props) => (
+  <div
+    class={cn(
+      'group relative surface border hairline rounded-lg p-2.5 cursor-pointer transition',
+      'hover:border-line-strong hover:bg-bg-raised',
+    )}
+    onClick={props.onOpen}
+    onContextMenu={(e) => {
+      if (!props.onMore) return;
+      e.preventDefault();
+      props.onMore(e);
+    }}
+    use:longpress={
+      props.onMore
+        ? {
+            onLongPress: (e) => {
+              const t = e.touches[0];
+              props.onMore!({ clientX: t.clientX, clientY: t.clientY, preventDefault: () => {} } as MouseEvent);
+            },
+          }
+        : undefined
+    }
+  >
+    <Show when={props.onMore}>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          props.onMore!(e);
+        }}
+        class="absolute top-1.5 right-1.5 z-10 w-7 h-7 inline-flex items-center justify-center rounded-md text-fg-subtle hover:bg-bg-hover hover:text-fg opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        aria-label="More actions"
+      >
+        <IconMoreVertical size={14} />
+      </button>
+    </Show>
+
+    <div class="aspect-square rounded-md overflow-hidden bg-bg-inset flex items-center justify-center mb-2">
+      <FileIcon asFolder size="xl" rounded="md" />
+    </div>
+
+    <div class="text-[12px] font-medium truncate" title={props.folder.name}>
+      {folderLabel(props.folder.name)}
+    </div>
+    <div class="flex items-center justify-between mt-0.5 text-[11px] text-fg-muted">
+      <span>文件夹</span>
+      <Show when={props.folder.shared || props.folder.directlyShared}>
+        <span class="text-brand inline-flex items-center gap-0.5" title={props.folder.directlyShared ? '已分享' : '继承分享'}>
+          <IconShare size={10} />
+        </span>
+      </Show>
+    </div>
   </div>
 );
 
@@ -136,9 +208,11 @@ const FileCard: Component<{
 
 export const FileTable: Component<{
   files: FileMeta[];
+  subfolders?: FolderInfo[];
   store: DashboardStore;
   onPreview: (f: FileMeta) => void;
   onMore: (e: MouseEvent, f: FileMeta) => void;
+  onFolderMore?: (e: MouseEvent, folder: FolderInfo) => void;
 }> = (props) => {
   const allChecked = () =>
     props.files.length > 0 && props.files.every((f) => props.store.isSelected(f.id));
@@ -162,6 +236,15 @@ export const FileTable: Component<{
       </div>
 
       <ul class="divide-y hairline divide-line">
+        <For each={props.subfolders ?? []}>
+          {(folder) => (
+            <FolderRow
+              folder={folder}
+              onOpen={() => props.store.setCurrentFolder(folder.name)}
+              onMore={props.onFolderMore ? (e) => props.onFolderMore!(e, folder) : undefined}
+            />
+          )}
+        </For>
         <For each={props.files}>
           {(file) => (
             <FileRow file={file} store={props.store} onPreview={() => props.onPreview(file)} onMore={(e) => props.onMore(e, file)} />
@@ -171,6 +254,76 @@ export const FileTable: Component<{
     </div>
   );
 };
+
+const FolderRow: Component<{
+  folder: FolderInfo;
+  onOpen: () => void;
+  onMore?: (e: MouseEvent) => void;
+}> = (props) => (
+  <li
+    class={cn(
+      'grid items-center px-3 py-2.5 transition cursor-pointer hover:bg-bg-hover',
+      'grid-cols-[44px_minmax(0,1fr)_44px] md:grid-cols-[36px_minmax(0,1fr)_96px_96px_140px_72px_36px]',
+    )}
+    onClick={props.onOpen}
+    onContextMenu={(e) => {
+      if (!props.onMore) return;
+      e.preventDefault();
+      props.onMore(e);
+    }}
+    use:longpress={
+      props.onMore
+        ? {
+            onLongPress: (e) => {
+              const t = e.touches[0];
+              props.onMore!({ clientX: t.clientX, clientY: t.clientY, preventDefault: () => {} } as MouseEvent);
+            },
+          }
+        : undefined
+    }
+  >
+    <span />
+    <div class="flex items-center gap-2.5 min-w-0">
+      <FileIcon asFolder size="sm" rounded="md" />
+      <div class="min-w-0">
+        <div class="text-[13.5px] truncate" title={props.folder.name}>
+          {folderLabel(props.folder.name)}
+        </div>
+        <div class="md:hidden mt-0.5 text-[11px] text-fg-muted">文件夹</div>
+      </div>
+    </div>
+    <span class="hidden md:flex">
+      <span class="pill">文件夹</span>
+    </span>
+    <span class="hidden md:block text-[12px] text-fg-muted">—</span>
+    <span class="hidden md:block text-[12px] text-fg-muted">—</span>
+    <span class="hidden md:flex justify-end">
+      <Show when={props.folder.shared || props.folder.directlyShared}>
+        <span class="inline-flex items-center gap-1 text-[11px] text-brand" title={props.folder.directlyShared ? '已分享' : '继承分享'}>
+          <IconShare size={11} />
+        </span>
+      </Show>
+    </span>
+    <span class="flex justify-end">
+      <Show
+        when={props.onMore}
+        fallback={<IconChevronRight size={14} class="text-fg-subtle" />}
+      >
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onMore!(e);
+          }}
+          class="tap tap-md inline-flex items-center justify-center rounded-md text-fg-subtle hover:bg-bg-hover hover:text-fg"
+          aria-label="More actions"
+        >
+          <IconMoreVertical size={14} />
+        </button>
+      </Show>
+    </span>
+  </li>
+);
 
 const SortHeader: Component<{
   k: SortKey;

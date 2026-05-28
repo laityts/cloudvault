@@ -64,6 +64,8 @@ export interface DashboardStore {
 
   filteredFiles: () => FileMeta[];
   folderTree: () => FolderNode[];
+  /** Direct child folders of the current folder (one level deep, sorted by name). */
+  currentSubfolders: () => FolderInfo[];
 
   // mutations
   refreshAll: () => Promise<void>;
@@ -162,6 +164,23 @@ export function createDashboardStore(): DashboardStore {
       return v * dir;
     });
     return list;
+  });
+
+  const currentSubfolders = createMemo<FolderInfo[]>(() => {
+    const list = folders()?.folders ?? [];
+    const cur = currentFolder();
+    const q = search().trim().toLowerCase();
+    const result = list.filter((f) => {
+      if (!f.name) return false;
+      if (cur === 'root') return !f.name.includes('/');
+      const prefix = `${cur}/`;
+      if (!f.name.startsWith(prefix)) return false;
+      return !f.name.slice(prefix.length).includes('/');
+    });
+    const filtered = q
+      ? result.filter((f) => (f.name.split('/').pop() ?? '').toLowerCase().includes(q))
+      : result;
+    return filtered.sort((a, b) => a.name.localeCompare(b.name));
   });
 
   const setCurrentFolder = (folder: string) => {
@@ -339,6 +358,7 @@ export function createDashboardStore(): DashboardStore {
     expandPath,
     filteredFiles,
     folderTree,
+    currentSubfolders,
     refreshAll,
     refreshFiles,
     refreshFolders,
