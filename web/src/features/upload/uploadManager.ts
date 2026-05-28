@@ -1,4 +1,4 @@
-import { multipartCreate, multipartComplete, multipartUploadPart } from '~/api';
+import { multipartCreate, multipartComplete, multipartUploadPart, multipartAbort, multipartAbortBeacon } from '~/api';
 import type { UploadPart } from '~/api/types';
 
 export type UploadStatus = 'pending' | 'uploading' | 'paused' | 'done' | 'error' | 'canceled';
@@ -159,6 +159,7 @@ export class UploadManager {
     const item = this.queue.find((q) => q.id === id);
     if (!item) return;
     const state = this.intern(item.id);
+    this.maybeAbortRemote(state);
     state.canceled = true;
     state.paused = false;
     state.abort?.abort();
@@ -218,6 +219,7 @@ export class UploadManager {
     for (const item of this.queue) {
       if (item.status === 'pending' || item.status === 'uploading' || item.status === 'paused') {
         const state = this.intern(item.id);
+        this.maybeAbortRemote(state);
         state.canceled = true;
         state.paused = false;
         state.abort?.abort();
@@ -246,20 +248,45 @@ export class UploadManager {
     this.processQueue();
   }
 
+  /**
+   * 清除非进行中的任务。
+   * - done: 直接移除
+   * - paused / error / canceled: 对 multipart 调 abort 释放 R2 已上传的 parts，
+   *   再移除（pending 因为还没创建 multipart，不需要 abort）
+   * - uploading: 保留，避免误中断
+   */
   clearCompleted(): void {
-    const remove = (q: UploadItem) =>
-      q.status === 'done' || q.status === 'canceled' || q.status === 'error';
-    for (const q of this.queue) if (remove(q)) this.internal.delete(q.id);
+    const remove = (q: UploadItem) => q.status !== 'uploading';
+    for (const q of this.queue) {
+      if (!remove(q)) continue;
+      const state = this.intern(q.id);
+      // pending 没创建 multipart；done 不能 abort（已 complete）。
+      if (q.status === 'paused' || q.status === 'error' || q.status === 'canceled') {
+        this.maybeAbortRemote(state);
+      }
+      state.abort?.abort();
+      this.internal.delete(q.id);
+    }
     this.queue = this.queue.filter((q) => !remove(q));
     this.emit();
   }
 
   clearAll(): void {
-    // 仅清掉非进行中的，避免误中断
-    const keep = (q: UploadItem) => q.status === 'uploading';
-    for (const q of this.queue) if (!keep(q)) this.internal.delete(q.id);
-    this.queue = this.queue.filter(keep);
-    this.emit();
+    // 同 clearCompleted；保留以兼容旧调用方。
+    this.clearCompleted();
+  }
+
+  /**
+   * 在 pagehide 等卸载场景调用。对所有有 multipart uploadId 但未 complete 的项
+   * 用 sendBeacon 发 abort。
+   */
+  abortPendingForUnload(): void {
+    for (const item of this.queue) {
+      const state = this.internal.get(item.id);
+      if (!state || !state.uploadId || !state.key) continue;
+      if (item.status === 'done') continue;
+      multipartAbortBeacon({ uploadId: state.uploadId, key: state.key });
+    }
   }
 
   // ── 内部 ──────────────────────────────────────────────────────────────
@@ -273,6 +300,18 @@ export class UploadManager {
     }
     item.status = 'paused';
     if (systemPaused) item.error = 'offline';
+  }
+
+  /**
+   * 如果 InternalState 持有未 complete 的 multipart uploadId，发送后端 abort
+   * 释放 R2 占用。fire-and-forget，不阻塞调用方。abort 后清掉本地引用避免重复。
+   */
+  private maybeAbortRemote(state: InternalState): void {
+    if (!state.uploadId || !state.key) return;
+    void multipartAbort({ uploadId: state.uploadId, key: state.key });
+    state.uploadId = undefined;
+    state.key = undefined;
+    state.completedParts = [];
   }
 
   private processQueue(): void {

@@ -164,6 +164,13 @@ function DashboardApp() {
       window.removeEventListener('offline', onOffline);
     });
 
+    // 刷新/关闭页面时，尽量通过 sendBeacon 通知后端 abort 未完成的 multipart，
+    // 避免它们成为 R2 上的"孤儿"占用。pagehide 比 beforeunload 更可靠，且与
+    // bfcache 兼容。
+    const onPageHide = () => uploadManager.abortPendingForUnload();
+    window.addEventListener('pagehide', onPageHide);
+    onCleanup(() => window.removeEventListener('pagehide', onPageHide));
+
     // Drag-drop globally
     let counter = 0;
     const onEnter = (e: DragEvent) => {
@@ -823,6 +830,7 @@ const UploadHeaderButton: Component<{
       active={props.active}
       onClick={props.onClick}
       class="relative"
+      attr:data-upload-trigger=""
     >
       <IconUpload size={15} />
       <Show when={inFlight() > 0}>

@@ -1,4 +1,4 @@
-import { For, Show, createMemo, type Component } from 'solid-js';
+import { For, Show, createEffect, createMemo, onCleanup, type Component } from 'solid-js';
 import { cn } from '~/lib/cn';
 import {
   ProgressBar,
@@ -47,8 +47,33 @@ export const UploadPanel: Component<{
   const canRetryAll = () => !props.offline && counts().error + counts().canceled > 0;
   const canClear = () => counts().done + counts().error + counts().canceled > 0;
 
+  // 点击面板外部 / Esc 自动关闭。判定时排除 header 上"上传任务"按钮（带
+  // data-upload-trigger），避免与按钮自身的 toggle 行为冲突。
+  let panelEl: HTMLDivElement | undefined;
+  createEffect(() => {
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target || !panelEl) return;
+      if (panelEl.contains(target)) return;
+      if (target.closest('[data-upload-trigger]')) return;
+      props.onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') props.onClose();
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown as unknown as EventListener);
+    document.addEventListener('keydown', onKey);
+    onCleanup(() => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown as unknown as EventListener);
+      document.removeEventListener('keydown', onKey);
+    });
+  });
+
   return (
     <div
+      ref={panelEl}
       class={cn(
         'fixed z-[8000] surface border hairline rounded-xl shadow-float overflow-hidden',
         'bottom-3 right-3 w-[min(94vw,380px)]',
@@ -93,14 +118,6 @@ export const UploadPanel: Component<{
               清除
             </button>
           </Show>
-          <button
-            type="button"
-            onClick={() => props.onClose()}
-            class="w-7 h-7 inline-flex items-center justify-center rounded text-fg-subtle hover:text-fg hover:bg-bg-hover"
-            aria-label="Close"
-          >
-            <IconClose size={14} />
-          </button>
         </div>
       </div>
 
