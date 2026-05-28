@@ -376,10 +376,10 @@ function DashboardApp() {
     <div class="min-h-dvh flex flex-col bg-bg-base">
       {/* HEADER */}
       <header class="sticky top-0 z-40 border-b hairline bg-bg-base/85 backdrop-blur-md safe-pt">
-        <div class="flex items-center gap-2 h-13 px-3 sm:px-4">
+        <div class="flex items-center gap-1 sm:gap-1.5 h-13 px-2 sm:px-4">
           <Show when={!isDesktop()}>
-            <IconButton label="Menu" onClick={() => setSidebarOpen(true)} size="md">
-              <IconMenu size={18} />
+            <IconButton label="Menu" onClick={() => setSidebarOpen(true)} size="sm">
+              <IconMenu size={16} />
             </IconButton>
           </Show>
           <BrandMark branding={branding()} size="sm" class="min-w-0" />
@@ -395,15 +395,15 @@ function DashboardApp() {
             active={showUploadPanel()}
             onClick={() => setShowUploadPanel((v) => !v)}
           />
-          <IconButton label="分享管理" onClick={() => setShareManagerOpen(true)} active={shareManagerOpen()} size="md">
-            <IconLink size={16} />
+          <IconButton label="分享管理" onClick={() => setShareManagerOpen(true)} active={shareManagerOpen()} size="sm">
+            <IconLink size={15} />
           </IconButton>
-          <ThemeToggle theme={theme()} onToggle={toggle} size="md" />
-          <IconButton label="Settings" onClick={() => setSettingsOpen(true)} size="md">
-            <IconSettings size={16} />
+          <ThemeToggle theme={theme()} onToggle={toggle} size="sm" />
+          <IconButton label="Settings" onClick={() => setSettingsOpen(true)} size="sm">
+            <IconSettings size={15} />
           </IconButton>
-          <IconButton label="Logout" onClick={() => void logout()} size="md">
-            <IconLogout size={16} />
+          <IconButton label="Logout" onClick={() => void logout()} size="sm">
+            <IconLogout size={15} />
           </IconButton>
         </div>
       </header>
@@ -795,19 +795,19 @@ const UploadHeaderButton: Component<{
   return (
     <IconButton
       label={inFlight() > 0 ? `上传任务（${inFlight()} 进行中）` : '上传任务'}
-      size="md"
+      size="sm"
       active={props.active}
       onClick={props.onClick}
       class="relative"
     >
-      <IconUpload size={16} />
+      <IconUpload size={15} />
       <Show when={inFlight() > 0}>
-        <span class="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-brand text-fg-onAccent text-[10px] font-semibold tabular">
+        <span class="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[15px] h-[15px] px-[3px] rounded-full bg-brand text-fg-onAccent text-[9.5px] font-semibold tabular leading-none ring-2 ring-bg-base">
           {inFlight()}
         </span>
       </Show>
       <Show when={inFlight() === 0 && failed() > 0}>
-        <span class="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-danger text-white text-[10px] font-semibold tabular">
+        <span class="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[15px] h-[15px] px-[3px] rounded-full bg-danger text-white text-[9.5px] font-semibold tabular leading-none ring-2 ring-bg-base">
           {failed()}
         </span>
       </Show>
