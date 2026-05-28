@@ -8,13 +8,36 @@ import { login } from '~/api';
 
 bootstrapTheme();
 
+const REMEMBER_KEY = 'cv-remember-password';
+
+function readRemembered(): string | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    return localStorage.getItem(REMEMBER_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeRemembered(value: string | null): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    if (value === null) localStorage.removeItem(REMEMBER_KEY);
+    else localStorage.setItem(REMEMBER_KEY, value);
+  } catch {
+    /* quota / privacy mode — ignore */
+  }
+}
+
 function LoginApp() {
   const branding = readBranding();
   applyBrandingToDocument(branding, '登录');
   const { theme, toggle } = createTheme();
   const toast = useToast();
 
-  const [password, setPassword] = createSignal('');
+  const initialRemembered = readRemembered();
+  const [password, setPassword] = createSignal(initialRemembered ?? '');
+  const [remember, setRemember] = createSignal(initialRemembered !== null);
   const [submitting, setSubmitting] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
@@ -28,6 +51,10 @@ function LoginApp() {
       if (!res.ok) {
         setError(res.error || '密码错误');
         toast.error(res.error || '密码错误');
+        // 密码错误时清掉记住的内容，避免下次仍预填错误密码
+        writeRemembered(null);
+      } else {
+        writeRemembered(remember() ? password() : null);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '连接错误');
@@ -76,6 +103,37 @@ function LoginApp() {
               value={password()}
               onInput={(e) => setPassword(e.currentTarget.value)}
             />
+
+            <label class="mt-3 flex items-center gap-2 cursor-pointer select-none group">
+              <input
+                type="checkbox"
+                class="sr-only peer"
+                checked={remember()}
+                onChange={(e) => setRemember(e.currentTarget.checked)}
+              />
+              <span
+                class="w-4 h-4 rounded border border-line-strong flex items-center justify-center transition-colors
+                       peer-checked:bg-brand peer-checked:border-brand
+                       peer-focus-visible:ring-2 peer-focus-visible:ring-brand peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-bg-base"
+                aria-hidden="true"
+              >
+                <svg
+                  class={`w-3 h-3 text-fg-onAccent ${remember() ? 'opacity-100' : 'opacity-0'} transition-opacity`}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="3"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M5 12.5l5 5L20 7" />
+                </svg>
+              </span>
+              <span class="text-[13px] text-fg-muted group-hover:text-fg">记住密码</span>
+              <span class="ml-auto text-[10.5px] text-fg-subtle" title="密码会以明文保存到当前浏览器的本地存储">
+                仅信任设备
+              </span>
+            </label>
 
             <Button type="submit" variant="primary" size="lg" block class="mt-5" loading={submitting()}>
               登录
