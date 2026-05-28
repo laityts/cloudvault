@@ -234,4 +234,29 @@ export async function multipartComplete(args: {
   if (!res.ok) throw new Error('Failed to complete multipart upload');
 }
 
+/** Abort a multipart upload to release any uploaded parts on R2.
+ *  Best-effort: server returns 200 even if the upload no longer exists. */
+export async function multipartAbort(args: { uploadId: string; key: string }): Promise<void> {
+  try {
+    await fetch('/api/files/upload?action=mpu-abort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(args),
+      credentials: 'same-origin',
+      keepalive: true,
+    });
+  } catch {
+    /* ignore — best effort */
+  }
+}
+
+/** Fire-and-forget abort using sendBeacon, suitable for pagehide. */
+export function multipartAbortBeacon(args: { uploadId: string; key: string }): void {
+  if (typeof navigator === 'undefined' || !navigator.sendBeacon) return;
+  // sendBeacon's allowed Content-Types are restricted; text/plain is universally accepted.
+  // Server's mpu-abort handler reads request.text() + JSON.parse so the wire format matches.
+  const blob = new Blob([JSON.stringify(args)], { type: 'text/plain;charset=UTF-8' });
+  navigator.sendBeacon('/api/files/upload?action=mpu-abort', blob);
+}
+
 export type { FileMeta, FolderInfo, StatsResponse, SiteSettings, FolderShareLinkInfo } from './types';

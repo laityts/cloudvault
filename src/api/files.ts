@@ -19,6 +19,7 @@ export async function upload(request: Request, env: Env): Promise<Response> {
   if (action === 'mpu-create') return handleMultipartCreate(request, env);
   if (action === 'mpu-upload') return handleMultipartUpload(request, env, url);
   if (action === 'mpu-complete') return handleMultipartComplete(request, env);
+  if (action === 'mpu-abort') return handleMultipartAbort(request, env);
 
   return handleDirectUpload(request, env);
 }
@@ -102,10 +103,30 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
     size: r2Object.size,
     type: r2Object.httpMetadata?.contentType || getMimeType(fileName),
     folder,
-  });
-  await putFile(env, meta);
+  });  await putFile(env, meta);
 
   return json(meta, 201);
+}
+
+async function handleMultipartAbort(request: Request, env: Env): Promise<Response> {
+  // 支持 sendBeacon (text/plain JSON) 与常规 application/json，方便 pagehide 触发。
+  let body: { uploadId: string; key: string };
+  try {
+    const raw = await request.text();
+    body = raw ? JSON.parse(raw) : { uploadId: '', key: '' };
+  } catch {
+    return error('Invalid JSON', 400);
+  }
+  if (!body.uploadId || !body.key) return error('uploadId and key required', 400);
+
+  // R2 abort 失败通常意味着上传已被 complete 或不存在，不应回 5xx 影响调用方。
+  try {
+    const multipart = env.VAULT_BUCKET.resumeMultipartUpload(body.key, body.uploadId);
+    await multipart.abort();
+  } catch {
+    /* swallow — best effort */
+  }
+  return json({ aborted: true });
 }
 
 export async function list(request: Request, env: Env): Promise<Response> {
