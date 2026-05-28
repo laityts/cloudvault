@@ -10,6 +10,7 @@ import {
   IconPlay,
   IconRefresh,
   IconWifiOff,
+  useToast,
 } from '~/ui';
 import type { UploadItem } from './uploadManager';
 import type { UploadManager } from './uploadManager';
@@ -29,6 +30,7 @@ export const UploadPanel: Component<{
   offline: boolean;
   onClose: () => void;
 }> = (props) => {
+  const toast = useToast();
   const counts = createMemo(() => {
     const c = { uploading: 0, pending: 0, paused: 0, done: 0, error: 0, canceled: 0 };
     for (const i of props.items) c[i.status]++;
@@ -37,11 +39,13 @@ export const UploadPanel: Component<{
 
   const inFlightLabel = () => counts().uploading + counts().pending;
   const totalCount = () => props.items.length;
+  const resumablePausedCount = () =>
+    props.items.filter((i) => i.status === 'paused' && !i.needsReselect).length;
 
   // Bulk-action visibility: enable each only when at least one item qualifies.
   // 暂停 / 恢复 互斥：有进行中显示"全部暂停"；否则若有暂停项显示"全部恢复"。
   const showPauseAll = () => counts().uploading + counts().pending > 0;
-  const showResumeAll = () => !showPauseAll() && !props.offline && counts().paused > 0;
+  const showResumeAll = () => !showPauseAll() && !props.offline && resumablePausedCount() > 0;
   const canCancelAll = () =>
     counts().uploading + counts().pending + counts().paused > 0;
   const canRetryAll = () => !props.offline && counts().error + counts().canceled > 0;
@@ -112,7 +116,11 @@ export const UploadPanel: Component<{
           <Show when={canClear()}>
             <button
               type="button"
-              onClick={() => props.manager.clearCompleted()}
+              onClick={() => {
+                const removable = props.items.filter((i) => i.status !== 'uploading').length;
+                props.manager.clearCompleted();
+                if (removable > 0) toast.success(`已清除 ${removable} 项`);
+              }}
               class="text-[11px] text-fg-muted hover:text-fg px-1.5 h-7 rounded"
             >
               清除
@@ -198,6 +206,7 @@ const Row: Component<{
   };
 
   const statusText = () => {
+    if (props.item.needsReselect) return '刷新后请重新选择该文件';
     if (props.item.status === 'paused' && props.item.error === 'offline') return '离线已暂停';
     return STATUS_LABEL[props.item.status];
   };
@@ -208,12 +217,14 @@ const Row: Component<{
     return 'active';
   };
 
+  const displayName = () => props.item.file?.name ?? props.item.fileName;
+
   return (
     <li class="px-3.5 py-2 border-b hairline last:border-b-0">
       <div class="flex items-center gap-2">
         <div class="flex-1 min-w-0">
-          <div class="text-[12px] font-medium truncate" title={props.item.file.name}>
-            {props.item.file.name}
+          <div class="text-[12px] font-medium truncate" title={displayName()}>
+            {displayName()}
           </div>
           <ProgressBar class="mt-1" value={props.item.progress} status={progressStatus()} />
           <div class="mt-1 flex items-center gap-1.5 text-[11px]">
@@ -245,12 +256,12 @@ const Row: Component<{
               <IconPause size={12} />
             </RowAction>
           </Show>
-          <Show when={isPaused() && !props.offline}>
+          <Show when={isPaused() && !props.offline && !props.item.needsReselect}>
             <RowAction label="恢复" onClick={() => props.manager.resume(props.item.id)}>
               <IconPlay size={12} />
             </RowAction>
           </Show>
-          <Show when={(props.item.status === 'error' || props.item.status === 'canceled') && !props.offline}>
+          <Show when={(props.item.status === 'error' || props.item.status === 'canceled') && !props.offline && !props.item.needsReselect}>
             <RowAction label="重试" onClick={() => props.manager.retry(props.item.id)}>
               <IconRefresh size={12} />
             </RowAction>
