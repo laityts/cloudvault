@@ -518,7 +518,8 @@ function DashboardApp() {
             >
               <span class="hidden sm:inline">新建文件夹</span>
             </Button>
-            <label class="inline-flex">
+            {/* 桌面端上传按钮；移动端用底部 FAB（line 621） */}
+            <label class="hidden md:inline-flex">
               <Button variant="primary" size="sm" leadingIcon={<IconUpload size={13} />}>
                 <span class="hidden sm:inline">上传</span>
               </Button>
