@@ -135,9 +135,10 @@ function DashboardApp() {
   const uploadManager = new UploadManager();
   const [uploads, setUploads] = createSignal<UploadItem[]>([]);
   const [showUploadPanel, setShowUploadPanel] = createSignal(false);
-  const [offline, setOffline] = createSignal(
-    typeof navigator !== 'undefined' && navigator.onLine === false,
-  );
+  // 默认乐观假设在线。navigator.onLine 首次读取在某些环境下不可靠（桌面
+  // Chrome 在没有网络变化事件时也可能返回 false），所以只信任真实触发的
+  // 'offline' 事件，避免错误地显示离线横幅并屏蔽恢复按钮。
+  const [offline, setOffline] = createSignal(false);
 
   // Share manager drawer
   const [shareManagerOpen, setShareManagerOpen] = createSignal(false);
