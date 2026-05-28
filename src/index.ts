@@ -3,6 +3,8 @@ import { error, corsPreflightResponse } from './utils/response';
 import { createRouter } from './router';
 import { handleLogin, handleLogout, authMiddleware, validateSession, webdavBasicAuth } from './auth';
 import * as files from './api/files';
+import * as folders from './api/folders';
+import * as media from './api/media';
 import * as share from './api/share';
 import * as stats from './api/stats';
 import * as settings from './api/settings';
@@ -47,10 +49,10 @@ const router = createRouter([
   { method: 'PUT', pattern: '/api/files/upload', middleware: [authMiddleware], handler: files.upload },
   { method: 'POST', pattern: '/api/files/delete', middleware: [authMiddleware], handler: files.deleteFiles },
   { method: 'POST', pattern: '/api/files/move', middleware: [authMiddleware], handler: files.moveFiles },
-  { method: 'POST', pattern: '/api/files/zip', middleware: [authMiddleware], handler: files.zipDownload },
+  { method: 'POST', pattern: '/api/files/zip', middleware: [authMiddleware], handler: media.zipDownload },
 
-  { method: 'GET', pattern: '/api/files/:id/thumbnail', middleware: [authMiddleware], handler: files.thumbnail },
-  { method: 'GET', pattern: '/api/files/:id/preview', middleware: [authMiddleware], handler: files.preview },
+  { method: 'GET', pattern: '/api/files/:id/thumbnail', middleware: [authMiddleware], handler: media.thumbnail },
+  { method: 'GET', pattern: '/api/files/:id/preview', middleware: [authMiddleware], handler: media.preview },
   { method: 'GET', pattern: '/api/files/:id/download', middleware: [authMiddleware], handler: files.download },
 
   { method: 'GET', pattern: '/api/files/:id', middleware: [authMiddleware], handler: files.get },
@@ -58,10 +60,10 @@ const router = createRouter([
   { method: 'DELETE', pattern: '/api/files/:id', middleware: [authMiddleware], handler: files.deleteFiles },
 
   // ── Folders API (session auth) ────────────────────────────────────
-  { method: 'GET', pattern: '/api/folders', middleware: [authMiddleware], handler: files.listFolders },
-  { method: 'POST', pattern: '/api/folders', middleware: [authMiddleware], handler: files.createFolder },
-  { method: 'PUT', pattern: '/api/folders', middleware: [authMiddleware], handler: files.renameFolder },
-  { method: 'DELETE', pattern: '/api/folders', middleware: [authMiddleware], handler: files.deleteFolder },
+  { method: 'GET', pattern: '/api/folders', middleware: [authMiddleware], handler: folders.listFolders },
+  { method: 'POST', pattern: '/api/folders', middleware: [authMiddleware], handler: folders.createFolder },
+  { method: 'PUT', pattern: '/api/folders', middleware: [authMiddleware], handler: folders.renameFolder },
+  { method: 'DELETE', pattern: '/api/folders', middleware: [authMiddleware], handler: folders.deleteFolder },
   { method: 'POST', pattern: '/api/folders/exclude', middleware: [authMiddleware], handler: share.toggleFolderExclude },
   { method: 'POST', pattern: '/api/folders/share', middleware: [authMiddleware], handler: share.shareFolderToggle },
   { method: 'GET', pattern: '/api/folders/shared', middleware: [authMiddleware], handler: share.listSharedFolders },
