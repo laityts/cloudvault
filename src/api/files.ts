@@ -1,5 +1,6 @@
 import type { Env } from '../utils/types';
 import { json, error, getMimeType } from '../utils/response';
+import { parseJson } from '../utils/validate';
 import { buildR2Key, extractPathParam, isUnsafeKey } from '../utils/keys';
 import { createFileMeta } from '../utils/file-meta';
 import { streamR2Object } from '../utils/r2';
@@ -83,11 +84,11 @@ async function handleMultipartUpload(request: Request, env: Env, url: URL): Prom
 }
 
 async function handleMultipartComplete(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{
+  const body = await parseJson<{
     uploadId: string;
     key: string;
     parts: { partNumber: number; etag: string }[];
-  }>();
+  }>(request);
 
   const multipart = env.VAULT_BUCKET.resumeMultipartUpload(body.key, body.uploadId);
   const r2Object = await multipart.complete(body.parts);
@@ -160,7 +161,7 @@ export async function deleteFiles(request: Request, env: Env): Promise<Response>
     if (!id) return error('File ID required', 400);
     ids = [id];
   } else {
-    const body = await request.json<{ ids: string[] }>();
+    const body = await parseJson<{ ids: string[] }>(request);
     ids = body.ids;
   }
 
@@ -183,7 +184,7 @@ export async function rename(request: Request, env: Env): Promise<Response> {
   const meta = await getFile(env, id);
   if (!meta) return error('File not found', 404);
 
-  const body = await request.json<{ name: string }>();
+  const body = await parseJson<{ name: string }>(request);
   if (!body.name?.trim()) return error('Name required', 400);
 
   meta.name = body.name.trim();
@@ -193,7 +194,7 @@ export async function rename(request: Request, env: Env): Promise<Response> {
 }
 
 export async function moveFiles(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ ids: string[]; targetFolder: string }>();
+  const body = await parseJson<{ ids: string[]; targetFolder: string }>(request);
   if (!body.ids?.length) return error('No file IDs provided', 400);
   if (body.targetFolder === undefined) return error('Target folder required', 400);
 

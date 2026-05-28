@@ -1,5 +1,6 @@
 import type { Env } from './utils/types';
 import { error, redirect } from './utils/response';
+import { parsePassword } from './utils/validate';
 import {
   getSession,
   putSession,
@@ -75,19 +76,7 @@ function getSessionId(request: Request): string | null {
 export async function handleLogin(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') return error('Method not allowed', 405);
 
-  const contentType = request.headers.get('Content-Type') || '';
-  let password: string;
-
-  if (contentType.includes('application/x-www-form-urlencoded')) {
-    const formData = await request.formData();
-    password = formData.get('password') as string || '';
-  } else if (contentType.includes('application/json')) {
-    const body = await request.json<{ password: string }>();
-    password = body.password || '';
-  } else {
-    return error('Unsupported content type', 415);
-  }
-
+  const password = await parsePassword(request);
   if (!password) return error('Password required', 400);
 
   const storedHash = await hashPassword(env.ADMIN_PASSWORD);

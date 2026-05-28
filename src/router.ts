@@ -1,4 +1,6 @@
 import type { Env } from './utils/types';
+import { json } from './utils/response';
+import { AppError } from './utils/handler';
 
 export type RouteMethod =
   | '*'
@@ -92,7 +94,14 @@ export function createRouter(routes: Route[]) {
         const intercept = await mw(request, env, ctx);
         if (intercept) return intercept;
       }
-      return await r.handler(request, env, ctx);
+      try {
+        return await r.handler(request, env, ctx);
+      } catch (e) {
+        if (e instanceof AppError) {
+          return json({ error: e.message, code: e.code }, e.status);
+        }
+        throw e;
+      }
     }
     return null;
   };

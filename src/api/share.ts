@@ -1,5 +1,6 @@
 import type { Env } from '../utils/types';
 import { json, error } from '../utils/response';
+import { parseJson } from '../utils/validate';
 import { extractPathParam } from '../utils/keys';
 import {
   getFile,
@@ -73,11 +74,11 @@ export async function resolveFolderShareToken(
 // ─── File Share CRUD (admin) ──────────────────────────────────────────
 
 export async function createShare(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{
+  const body = await parseJson<{
     fileId: string;
     password?: string;
     expiresInDays?: number;
-  }>();
+  }>(request);
 
   if (!body.fileId) return error('fileId required', 400);
 
@@ -142,7 +143,7 @@ export async function getShareInfo(request: Request, env: Env): Promise<Response
 // ─── Folder Share Toggle (admin) ──────────────────────────────────────
 
 export async function shareFolderToggle(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ folder: string }>();
+  const body = await parseJson<{ folder: string }>(request);
   if (!body.folder?.trim()) return error('Folder name required', 400);
 
   const folder = body.folder.trim();
@@ -161,7 +162,7 @@ export async function listSharedFolders(_request: Request, env: Env): Promise<Re
 }
 
 export async function toggleFolderExclude(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ folder: string }>();
+  const body = await parseJson<{ folder: string }>(request);
   if (!body.folder?.trim()) return error('Folder name required', 400);
 
   const folder = body.folder.trim();
@@ -177,11 +178,11 @@ export async function toggleFolderExclude(request: Request, env: Env): Promise<R
 // ─── Folder Share Link CRUD (admin) ────────────────────────────────────
 
 export async function createFolderShareLink(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{
+  const body = await parseJson<{
     folder: string;
     password?: string;
     expiresInDays?: number;
-  }>();
+  }>(request);
 
   if (!body.folder?.trim()) return error('Folder name required', 400);
   const folder = body.folder.trim();

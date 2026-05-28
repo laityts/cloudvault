@@ -1,5 +1,6 @@
 import type { Env, FileMeta } from '../utils/types';
 import { json, error, getPreviewType, fetchAssetHtml, injectBranding } from '../utils/response';
+import { parsePassword } from '../utils/validate';
 import { extractPathParam } from '../utils/keys';
 import { streamR2Object } from '../utils/r2';
 import {
@@ -447,18 +448,7 @@ export async function handleSharePassword(request: Request, env: Env): Promise<R
     });
   }
 
-  const contentType = request.headers.get('Content-Type') || '';
-  let password: string;
-  if (contentType.includes('application/x-www-form-urlencoded')) {
-    const formData = await request.formData();
-    password = (formData.get('password') as string) || '';
-  } else if (contentType.includes('application/json')) {
-    const body = await request.json<{ password: string }>();
-    password = body.password || '';
-  } else {
-    return error('Unsupported content type', 415);
-  }
-
+  const password = await parsePassword(request);
   const valid = await verifySharePassword(password, storedPassword);
   if (!valid) return error('Invalid password', 401);
 

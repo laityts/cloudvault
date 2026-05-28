@@ -1,5 +1,6 @@
 import type { Env } from '../utils/types';
 import { json, error } from '../utils/response';
+import { parseJson } from '../utils/validate';
 import { buildR2Key } from '../utils/keys';
 import { getSharedFolders, getExcludedFolders, isFolderShared } from './share';
 import {
@@ -29,7 +30,7 @@ import {
 } from '../db/shares';
 
 export async function createFolder(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ name: string; parent: string }>();
+  const body = await parseJson<{ name: string; parent: string }>(request);
   if (!body.name?.trim()) return error('Folder name required', 400);
 
   const folderName = body.parent === 'root' ? body.name.trim() : body.parent + '/' + body.name.trim();
@@ -39,7 +40,7 @@ export async function createFolder(request: Request, env: Env): Promise<Response
 }
 
 export async function deleteFolder(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ folder: string }>();
+  const body = await parseJson<{ folder: string }>(request);
   if (!body.folder?.trim()) return error('Folder name required', 400);
   const folder = body.folder.trim();
 
@@ -64,7 +65,7 @@ export async function deleteFolder(request: Request, env: Env): Promise<Response
 }
 
 export async function renameFolder(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ oldName: string; newName: string }>();
+  const body = await parseJson<{ oldName: string; newName: string }>(request);
   if (!body.oldName?.trim() || !body.newName?.trim()) return error('Both old and new names required', 400);
   const oldName = body.oldName.trim();
   const newName = body.newName.trim();

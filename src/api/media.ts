@@ -1,5 +1,6 @@
 import type { Env, FileMeta } from '../utils/types';
 import { json, error } from '../utils/response';
+import { parseJson } from '../utils/validate';
 import { extractPathParam } from '../utils/keys';
 import { streamR2Object } from '../utils/r2';
 import { getFile } from '../db/files';
@@ -41,7 +42,7 @@ export async function preview(request: Request, env: Env): Promise<Response> {
 }
 
 export async function zipDownload(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ ids: string[] }>();
+  const body = await parseJson<{ ids: string[] }>(request);
   if (!body.ids?.length) return error('No file IDs provided', 400);
   if (body.ids.length > 100) return error('Max 100 files per zip', 400);
 
