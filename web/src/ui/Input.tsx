@@ -26,8 +26,8 @@ export const Input: Component<InputProps> = (props) => {
         {...rest}
         class={cn(
           SIZES[local.size ?? 'md'],
-          local.leadingIcon && 'pl-9',
-          local.trailingIcon && 'pr-9',
+          local.leadingIcon && '!pl-9',
+          local.trailingIcon && '!pr-9',
           local.class,
         )}
       />
