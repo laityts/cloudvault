@@ -1,12 +1,10 @@
-import { For, Show, createMemo, createResource, createSignal, type Component } from 'solid-js';
+import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, type Component } from 'solid-js';
 import {
-  Drawer,
   Spinner,
   EmptyState,
   IconButton,
   IconLink,
   IconLock,
-  IconClose,
   IconCopy,
   IconTrash,
   IconWarning,
@@ -110,18 +108,52 @@ export const ShareManagerDrawer: Component<{
     }
   };
 
+  // 点外部 / Esc 自动关闭。判定时排除 [data-share-trigger]（header 上的分享管理按钮）
+  // 与所有 Toast / Dialog 弹层，避免与按钮自身 toggle 冲突。
+  let panelEl: HTMLDivElement | undefined;
+  createEffect(() => {
+    if (!props.open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target || !panelEl) return;
+      if (panelEl.contains(target)) return;
+      if (target.closest('[data-share-trigger]')) return;
+      // 不抢断属于 ToastProvider / Dialog 等更高层 portal 的点击
+      if (target.closest('[role="alert"]') || target.closest('[role="dialog"]')) return;
+      props.onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') props.onClose();
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown as unknown as EventListener);
+    document.addEventListener('keydown', onKey);
+    onCleanup(() => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown as unknown as EventListener);
+      document.removeEventListener('keydown', onKey);
+    });
+  });
+
   return (
-    <Drawer open={props.open} onClose={props.onClose} side="right" width="min(94vw, 420px)">
-      <div class="flex flex-col h-full">
+    <Show when={props.open}>
+      <div
+        ref={panelEl}
+        class={cn(
+          'fixed z-[8000] surface border hairline rounded-xl shadow-float overflow-hidden flex flex-col',
+          'bottom-3 right-3 w-[min(94vw,420px)] max-h-[min(72vh,560px)]',
+          'sm:bottom-4 sm:right-4 safe-pb',
+          'animate-slide-up',
+        )}
+        role="dialog"
+        aria-label="分享管理"
+      >
         {/* Header */}
         <div class="flex items-center justify-between px-3.5 py-2.5 border-b hairline shrink-0">
           <div class="flex items-center gap-2 min-w-0">
             <IconLink size={15} class="text-fg-subtle shrink-0" />
             <span class="text-[13.5px] font-medium">分享管理</span>
           </div>
-          <IconButton label="关闭" size="sm" onClick={props.onClose}>
-            <IconClose size={14} />
-          </IconButton>
         </div>
 
         {/* Tabs */}
@@ -144,7 +176,7 @@ export const ShareManagerDrawer: Component<{
           </TabButton>
         </div>
 
-        {/* Filter chips (only in files tab + folder-link sub-list) */}
+        {/* Filter chips */}
         <div class="flex items-center gap-1 px-3 py-2 border-b hairline overflow-x-auto shrink-0">
           <FilterChip active={filter() === 'all'} onClick={() => setFilter('all')}>全部</FilterChip>
           <FilterChip active={filter() === 'active'} onClick={() => setFilter('active')}>未过期</FilterChip>
@@ -153,7 +185,7 @@ export const ShareManagerDrawer: Component<{
         </div>
 
         {/* Content */}
-        <div class="flex-1 overflow-y-auto">
+        <div class="flex-1 overflow-y-auto min-h-0">
           <Show
             when={!data.loading}
             fallback={
@@ -193,7 +225,6 @@ export const ShareManagerDrawer: Component<{
             </Show>
 
             <Show when={tab() === 'folders'}>
-              {/* Folder share links */}
               <Show when={filteredFolderLinks().length > 0}>
                 <SectionHeader>分享链接</SectionHeader>
                 <ul class="divide-y hairline divide-line">
@@ -213,7 +244,6 @@ export const ShareManagerDrawer: Component<{
                 </ul>
               </Show>
 
-              {/* Public folders (no token, just toggled visible) */}
               <Show when={filter() === 'all' && (data()?.sharedFolders.length ?? 0) > 0}>
                 <SectionHeader>公开访问的文件夹</SectionHeader>
                 <ul class="divide-y hairline divide-line">
@@ -232,7 +262,6 @@ export const ShareManagerDrawer: Component<{
                 </ul>
               </Show>
 
-              {/* Excluded folders */}
               <Show when={filter() === 'all' && (data()?.excludedFolders.length ?? 0) > 0}>
                 <SectionHeader>已排除的子文件夹</SectionHeader>
                 <ul class="divide-y hairline divide-line">
@@ -266,7 +295,7 @@ export const ShareManagerDrawer: Component<{
           </Show>
         </div>
       </div>
-    </Drawer>
+    </Show>
   );
 };
 

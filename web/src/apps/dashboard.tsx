@@ -415,7 +415,13 @@ function DashboardApp() {
             active={showUploadPanel()}
             onClick={() => setShowUploadPanel((v) => !v)}
           />
-          <IconButton label="分享管理" onClick={() => setShareManagerOpen(true)} active={shareManagerOpen()} size="sm">
+          <IconButton
+            label="分享管理"
+            onClick={() => setShareManagerOpen((v) => !v)}
+            active={shareManagerOpen()}
+            size="sm"
+            attr:data-share-trigger=""
+          >
             <IconLink size={15} />
           </IconButton>
           <ThemeToggle theme={theme()} onToggle={toggle} size="sm" />
