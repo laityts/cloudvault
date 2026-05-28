@@ -133,6 +133,15 @@ export async function searchFiles(
   return (results || []).map(rowToMeta);
 }
 
+export async function listSharedFiles(env: Env): Promise<FileMeta[]> {
+  const { results } = await env.VAULT_DB
+    .prepare(
+      'SELECT * FROM files WHERE share_token IS NOT NULL ORDER BY uploaded_at DESC',
+    )
+    .all<FileRow>();
+  return (results || []).map(rowToMeta);
+}
+
 export async function listAllFiles(env: Env): Promise<FileMeta[]> {
   const { results } = await env.VAULT_DB
     .prepare('SELECT * FROM files ORDER BY uploaded_at DESC')

@@ -70,6 +70,7 @@ const router = createRouter([
   { method: 'GET', pattern: '/api/folders/shared', middleware: [authMiddleware], handler: share.listSharedFolders },
 
   // ── Share API (session auth) ──────────────────────────────────────
+  { method: 'GET', pattern: '/api/shares', middleware: [authMiddleware], handler: share.listShares },
   { method: 'POST', pattern: '/api/share', middleware: [authMiddleware], handler: share.createShare },
   { method: 'GET', pattern: '/api/share/:token', middleware: [authMiddleware], handler: share.getShareInfo },
   { method: 'DELETE', pattern: '/api/share/:token', middleware: [authMiddleware], handler: share.revokeShare },

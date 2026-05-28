@@ -140,6 +140,13 @@ export async function upsertFolderShareLink(
   ]);
 }
 
+export async function listAllFolderShareLinks(env: Env): Promise<FolderShareLink[]> {
+  const { results } = await env.VAULT_DB
+    .prepare('SELECT * FROM folder_share_links ORDER BY created_at DESC')
+    .all<FolderShareLinkRow>();
+  return (results || []).map(linkRowToObj);
+}
+
 export async function deleteFolderShareLinkByFolder(
   env: Env,
   folder: string,

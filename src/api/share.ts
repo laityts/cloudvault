@@ -5,6 +5,7 @@ import { extractPathParam } from '../utils/keys';
 import {
   getFile,
   putFile,
+  listSharedFiles,
 } from '../db/files';
 import {
   isFolderShareMarked,
@@ -19,6 +20,7 @@ import {
   getFolderShareLinkByFolder,
   upsertFolderShareLink,
   deleteFolderShareLinkByFolder,
+  listAllFolderShareLinks,
 } from '../db/shares';
 
 // ─── Password Hashing (shared with public + download flows) ──────────
@@ -237,5 +239,45 @@ export async function getFolderShareLinkInfo(request: Request, env: Env): Promis
     token: link.token,
     hasPassword: !!link.passwordHash,
     expiresAt: link.expiresAt,
+  });
+}
+
+// ─── Share Manager 聚合视图 ────────────────────────────────────────────
+
+/**
+ * 给 Share Manager 一次拉齐所有分享数据：
+ * - files: 所有 share_token != null 的文件
+ * - folderLinks: folder_share_links 全表
+ * - sharedFolders / excludedFolders: 文件夹分享标记表
+ */
+export async function listShares(_request: Request, env: Env): Promise<Response> {
+  const [files, folderLinks, sharedFolders, excludedFolders] = await Promise.all([
+    listSharedFiles(env),
+    listAllFolderShareLinks(env),
+    dbListSharedFolders(env),
+    dbListExcludedFolders(env),
+  ]);
+  return json({
+    files: files.map((f) => ({
+      id: f.id,
+      name: f.name,
+      size: f.size,
+      type: f.type,
+      folder: f.folder,
+      uploadedAt: f.uploadedAt,
+      shareToken: f.shareToken,
+      hasPassword: !!f.sharePassword,
+      shareExpiresAt: f.shareExpiresAt,
+      downloads: f.downloads,
+    })),
+    folderLinks: folderLinks.map((l) => ({
+      token: l.token,
+      folder: l.folder,
+      hasPassword: !!l.passwordHash,
+      expiresAt: l.expiresAt,
+      createdAt: l.createdAt,
+    })),
+    sharedFolders: Array.from(sharedFolders).sort(),
+    excludedFolders: Array.from(excludedFolders).sort(),
   });
 }
