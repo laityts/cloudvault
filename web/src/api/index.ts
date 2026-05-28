@@ -189,11 +189,15 @@ export async function logout() {
 
 // ─── Upload (multipart) ──────────────────────────────────────────────────
 
-export async function multipartCreate(headers: Record<string, string>): Promise<MultipartCreateResponse> {
+export async function multipartCreate(
+  headers: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<MultipartCreateResponse> {
   const res = await fetch('/api/files/upload?action=mpu-create', {
     method: 'POST',
     headers,
     credentials: 'same-origin',
+    signal,
   });
   if (!res.ok) throw new Error('Failed to create multipart upload');
   return res.json();
@@ -204,21 +208,28 @@ export async function multipartUploadPart(args: {
   key: string;
   partNumber: number;
   chunk: Blob;
+  signal?: AbortSignal;
 }): Promise<UploadPart> {
-  const { uploadId, key, partNumber, chunk } = args;
+  const { uploadId, key, partNumber, chunk, signal } = args;
   const url = `/api/files/upload?action=mpu-upload&uploadId=${encodeURIComponent(uploadId)}&partNumber=${partNumber}&key=${encodeURIComponent(key)}`;
-  const res = await fetch(url, { method: 'PUT', body: chunk, credentials: 'same-origin' });
+  const res = await fetch(url, { method: 'PUT', body: chunk, credentials: 'same-origin', signal });
   if (!res.ok) throw new Error(`Failed to upload part ${partNumber}`);
   const data = (await res.json()) as { etag: string };
   return { partNumber, etag: data.etag };
 }
 
-export async function multipartComplete(args: { uploadId: string; key: string; parts: UploadPart[] }) {
+export async function multipartComplete(args: {
+  uploadId: string;
+  key: string;
+  parts: UploadPart[];
+  signal?: AbortSignal;
+}) {
   const res = await fetch('/api/files/upload?action=mpu-complete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(args),
+    body: JSON.stringify({ uploadId: args.uploadId, key: args.key, parts: args.parts }),
     credentials: 'same-origin',
+    signal: args.signal,
   });
   if (!res.ok) throw new Error('Failed to complete multipart upload');
 }
