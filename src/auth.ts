@@ -1,5 +1,12 @@
-import { Env, Session, KV_PREFIX } from './utils/types';
-import { json, error, redirect } from './utils/response';
+import type { Env } from './utils/types';
+import { error, redirect } from './utils/response';
+import {
+  getSession,
+  putSession,
+  deleteSession,
+  purgeExpiredSessions,
+  shouldOpportunisticPurge,
+} from './db/sessions';
 
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -24,36 +31,38 @@ export async function createSession(env: Env): Promise<{ sessionId: string; cook
   const now = new Date();
   const expiresAt = new Date(now.getTime() + SESSION_DURATION_MS);
 
-  const session: Session = {
+  await putSession(env, {
     id: sessionId,
     createdAt: now.toISOString(),
     expiresAt: expiresAt.toISOString(),
-  };
-
-  await env.VAULT_KV.put(
-    KV_PREFIX.SESSION + sessionId,
-    JSON.stringify(session),
-    { expirationTtl: Math.floor(SESSION_DURATION_MS / 1000) }
-  );
+  });
 
   const cookie = `session=${sessionId}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(SESSION_DURATION_MS / 1000)}`;
   return { sessionId, cookie };
 }
 
-export async function validateSession(request: Request, env: Env): Promise<boolean> {
+export async function validateSession(
+  request: Request,
+  env: Env,
+  ctx?: ExecutionContext,
+): Promise<boolean> {
   const cookieHeader = request.headers.get('Cookie') || '';
   const match = cookieHeader.match(/session=([^;]+)/);
   if (!match) return false;
 
   const sessionId = match[1];
-  const raw = await env.VAULT_KV.get(KV_PREFIX.SESSION + sessionId);
-  if (!raw) return false;
+  const session = await getSession(env, sessionId);
+  if (!session) return false;
 
-  const session: Session = JSON.parse(raw);
   if (new Date(session.expiresAt) < new Date()) {
-    await env.VAULT_KV.delete(KV_PREFIX.SESSION + sessionId);
+    await deleteSession(env, sessionId);
     return false;
   }
+
+  if (ctx && shouldOpportunisticPurge()) {
+    ctx.waitUntil(purgeExpiredSessions(env));
+  }
+
   return true;
 }
 
@@ -101,7 +110,7 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
 export async function handleLogout(request: Request, env: Env): Promise<Response> {
   const sessionId = getSessionId(request);
   if (sessionId) {
-    await env.VAULT_KV.delete(KV_PREFIX.SESSION + sessionId);
+    await deleteSession(env, sessionId);
   }
   return new Response(null, {
     status: 302,
@@ -114,14 +123,18 @@ export async function handleLogout(request: Request, env: Env): Promise<Response
 
 const PUBLIC_PREFIXES = ['/s/', '/auth/', '/login'];
 
-export async function authMiddleware(request: Request, env: Env): Promise<Response | null> {
+export async function authMiddleware(
+  request: Request,
+  env: Env,
+  ctx?: ExecutionContext,
+): Promise<Response | null> {
   const url = new URL(request.url);
   for (const prefix of PUBLIC_PREFIXES) {
     if (url.pathname.startsWith(prefix)) return null;
   }
   if (url.pathname === '/login') return null;
 
-  const valid = await validateSession(request, env);
+  const valid = await validateSession(request, env, ctx);
   if (!valid) return redirect('/login');
   return null;
 }
