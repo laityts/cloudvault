@@ -39,8 +39,9 @@ export const UploadPanel: Component<{
   const totalCount = () => props.items.length;
 
   // Bulk-action visibility: enable each only when at least one item qualifies.
-  const canPauseAll = () => counts().uploading + counts().pending > 0;
-  const canResumeAll = () => !props.offline && counts().paused > 0;
+  // 暂停 / 恢复 互斥：有进行中显示"全部暂停"；否则若有暂停项显示"全部恢复"。
+  const showPauseAll = () => counts().uploading + counts().pending > 0;
+  const showResumeAll = () => !showPauseAll() && !props.offline && counts().paused > 0;
   const canCancelAll = () =>
     counts().uploading + counts().pending + counts().paused > 0;
   const canRetryAll = () => !props.offline && counts().error + counts().canceled > 0;
@@ -63,12 +64,12 @@ export const UploadPanel: Component<{
           </span>
         </div>
         <div class="flex items-center gap-0.5">
-          <Show when={canPauseAll()}>
+          <Show when={showPauseAll()}>
             <HeaderAction label="全部暂停" onClick={() => props.manager.pauseAll()}>
               <IconPause size={12} />
             </HeaderAction>
           </Show>
-          <Show when={canResumeAll()}>
+          <Show when={showResumeAll()}>
             <HeaderAction label="全部恢复" onClick={() => props.manager.resumeAll()}>
               <IconPlay size={12} />
             </HeaderAction>

@@ -42,7 +42,10 @@ export class UploadManager {
   private internal = new Map<string, InternalState>();
   private active = 0;
   private listeners = new Set<Listener>();
-  private offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  // 默认乐观假设在线。navigator.onLine 在某些浏览器/环境下首次读取并不可靠
+  // （例如桌面 Chrome 在没有任何网络变化事件时可能返回 false），所以只信任
+  // 实际触发的 'offline' 事件，避免错误地阻断队列。
+  private offline = false;
 
   constructor() {
     if (typeof window !== 'undefined') {
