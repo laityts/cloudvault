@@ -167,12 +167,16 @@ export async function deleteFiles(request: Request, env: Env): Promise<Response>
 
   if (!ids || ids.length === 0) return error('No file IDs provided', 400);
 
-  for (const id of ids) {
-    const meta = await getFile(env, id);
-    if (!meta) continue;
-    await env.VAULT_BUCKET.delete(meta.key);
-    await deleteFile(env, id);
-  }
+  await Promise.all(
+    ids.map(async (id) => {
+      const meta = await getFile(env, id);
+      if (!meta) return;
+      await Promise.all([
+        env.VAULT_BUCKET.delete(meta.key),
+        deleteFile(env, id),
+      ]);
+    }),
+  );
 
   return json({ deleted: ids.length });
 }
@@ -199,29 +203,30 @@ export async function moveFiles(request: Request, env: Env): Promise<Response> {
   if (body.targetFolder === undefined) return error('Target folder required', 400);
 
   const targetFolder = body.targetFolder;
-  let moved = 0;
 
-  for (const id of body.ids) {
-    const meta = await getFile(env, id);
-    if (!meta) continue;
-    if (meta.folder === targetFolder) continue;
+  const results = await Promise.all(
+    body.ids.map(async (id) => {
+      const meta = await getFile(env, id);
+      if (!meta) return false;
+      if (meta.folder === targetFolder) return false;
 
-    const newKey = buildR2Key(targetFolder, meta.name);
+      const newKey = buildR2Key(targetFolder, meta.name);
 
-    const oldObject = await env.VAULT_BUCKET.get(meta.key);
-    if (!oldObject) continue;
+      const oldObject = await env.VAULT_BUCKET.get(meta.key);
+      if (!oldObject) return false;
 
-    await env.VAULT_BUCKET.put(newKey, oldObject.body, {
-      httpMetadata: oldObject.httpMetadata,
-      customMetadata: oldObject.customMetadata,
-    });
-    await env.VAULT_BUCKET.delete(meta.key);
+      await env.VAULT_BUCKET.put(newKey, oldObject.body, {
+        httpMetadata: oldObject.httpMetadata,
+        customMetadata: oldObject.customMetadata,
+      });
+      await env.VAULT_BUCKET.delete(meta.key);
 
-    meta.key = newKey;
-    meta.folder = targetFolder;
-    await putFile(env, meta);
-    moved++;
-  }
+      meta.key = newKey;
+      meta.folder = targetFolder;
+      await putFile(env, meta);
+      return true;
+    }),
+  );
 
-  return json({ moved });
+  return json({ moved: results.filter(Boolean).length });
 }

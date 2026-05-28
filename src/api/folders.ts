@@ -44,24 +44,30 @@ export async function deleteFolder(request: Request, env: Env): Promise<Response
   if (!body.folder?.trim()) return error('Folder name required', 400);
   const folder = body.folder.trim();
 
-  await dbDeleteFolder(env, folder);
-  const deletedSubfolders = await deleteFoldersByPrefix(env, folder + '/');
-  await removeFolderShare(env, folder);
-  await removeFolderExclude(env, folder);
-  await deleteFolderShareLinkByFolder(env, folder);
-  await deleteFolderShareLinksByFolderPrefix(env, folder + '/');
+  // Folder-level cleanup (independent operations) + files listing all run in parallel.
+  const [deletedSubfolders, , , , , filesToDelete] = await Promise.all([
+    deleteFoldersByPrefix(env, folder + '/'),
+    dbDeleteFolder(env, folder),
+    removeFolderShare(env, folder),
+    removeFolderExclude(env, folder),
+    deleteFolderShareLinkByFolder(env, folder),
+    listFilesByFolderPrefix(env, folder),
+    deleteFolderShareLinksByFolderPrefix(env, folder + '/'),
+  ]);
 
-  const filesToDelete = await listFilesByFolderPrefix(env, folder);
-  let deletedFiles = 0;
-  for (const file of filesToDelete) {
-    if (file.folder === folder || file.folder.startsWith(folder + '/')) {
-      await env.VAULT_BUCKET.delete(file.key);
-      await deleteFile(env, file.id);
-      deletedFiles++;
-    }
-  }
+  const targets = filesToDelete.filter(
+    (f) => f.folder === folder || f.folder.startsWith(folder + '/'),
+  );
+  await Promise.all(
+    targets.map((file) =>
+      Promise.all([
+        env.VAULT_BUCKET.delete(file.key),
+        deleteFile(env, file.id),
+      ]),
+    ),
+  );
 
-  return json({ deleted: folder, deletedFiles, deletedSubfolders });
+  return json({ deleted: folder, deletedFiles: targets.length, deletedSubfolders });
 }
 
 export async function renameFolder(request: Request, env: Env): Promise<Response> {
@@ -71,46 +77,57 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
   const newName = body.newName.trim();
   if (oldName === newName) return json({ folder: newName });
 
-  const existing = await getFolder(env, oldName);
-  if (existing) {
-    await renameFolderRecord(env, oldName, newName, newName);
-  } else {
-    await putFolder(env, newName, newName);
+  // Up-front parallel reads.
+  const [existing, subFolders, isShared, isExcluded, allMovingFiles] = await Promise.all([
+    getFolder(env, oldName),
+    listFoldersByPrefix(env, oldName + '/'),
+    isFolderShareMarked(env, oldName),
+    isFolderExcluded(env, oldName),
+    listFilesByFolderPrefix(env, oldName),
+  ]);
+
+  // Top-level folder rename (or create-if-missing).
+  const topRename = existing
+    ? renameFolderRecord(env, oldName, newName, newName)
+    : putFolder(env, newName, newName);
+
+  // Subfolder renames are mutually independent.
+  const subRenames = subFolders
+    .filter((sf) => sf.path !== oldName)
+    .map((sf) => {
+      const newPath = newName + sf.path.slice(oldName.length);
+      return renameFolderRecord(env, sf.path, newPath, newPath);
+    });
+
+  const shareTransfers: Promise<unknown>[] = [];
+  if (isShared) {
+    shareTransfers.push(removeFolderShare(env, oldName), addFolderShare(env, newName));
+  }
+  if (isExcluded) {
+    shareTransfers.push(removeFolderExclude(env, oldName), addFolderExclude(env, newName));
   }
 
-  const subFolders = await listFoldersByPrefix(env, oldName + '/');
-  for (const sf of subFolders) {
-    if (sf.path === oldName) continue;
-    const newPath = newName + sf.path.slice(oldName.length);
-    await renameFolderRecord(env, sf.path, newPath, newPath);
-  }
+  await Promise.all([topRename, ...subRenames, ...shareTransfers]);
 
-  if (await isFolderShareMarked(env, oldName)) {
-    await removeFolderShare(env, oldName);
-    await addFolderShare(env, newName);
-  }
-  if (await isFolderExcluded(env, oldName)) {
-    await removeFolderExclude(env, oldName);
-    await addFolderExclude(env, newName);
-  }
-
-  const allMovingFiles = await listFilesByFolderPrefix(env, oldName);
-  for (const file of allMovingFiles) {
-    if (file.folder !== oldName && !file.folder.startsWith(oldName + '/')) continue;
-    const newFolder = newName + file.folder.slice(oldName.length);
-    const newKey = buildR2Key(newFolder, file.name);
-    const obj = await env.VAULT_BUCKET.get(file.key);
-    if (obj) {
-      await env.VAULT_BUCKET.put(newKey, obj.body, {
-        httpMetadata: obj.httpMetadata,
-        customMetadata: obj.customMetadata,
-      });
-      await env.VAULT_BUCKET.delete(file.key);
-    }
-    file.key = newKey;
-    file.folder = newFolder;
-    await putFile(env, file);
-  }
+  // File moves: each file is independent.
+  const moves = allMovingFiles
+    .filter((f) => f.folder === oldName || f.folder.startsWith(oldName + '/'))
+    .map(async (file) => {
+      const newFolder = newName + file.folder.slice(oldName.length);
+      const newKey = buildR2Key(newFolder, file.name);
+      const obj = await env.VAULT_BUCKET.get(file.key);
+      if (obj) {
+        await env.VAULT_BUCKET.put(newKey, obj.body, {
+          httpMetadata: obj.httpMetadata,
+          customMetadata: obj.customMetadata,
+        });
+        await env.VAULT_BUCKET.delete(file.key);
+      }
+      file.key = newKey;
+      file.folder = newFolder;
+      await putFile(env, file);
+    });
+  await Promise.all(moves);
 
   return json({ folder: newName });
 }
@@ -118,14 +135,19 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
 export async function listFolders(_request: Request, env: Env): Promise<Response> {
   const folderSet = new Set<string>();
 
-  const allFiles = await listAllFiles(env);
+  const [allFiles, folderRecords, sharedFolders, excludedFolders] = await Promise.all([
+    listAllFiles(env),
+    listAllFolders(env),
+    getSharedFolders(env),
+    getExcludedFolders(env),
+  ]);
+
   for (const file of allFiles) {
     if (file.folder && file.folder !== 'root') {
       folderSet.add(file.folder);
     }
   }
 
-  const folderRecords = await listAllFolders(env);
   for (const fr of folderRecords) {
     if (fr.path) folderSet.add(fr.path);
   }
@@ -140,8 +162,6 @@ export async function listFolders(_request: Request, env: Env): Promise<Response
     }
   }
 
-  const sharedFolders = await getSharedFolders(env);
-  const excludedFolders = await getExcludedFolders(env);
   const folderList = Array.from(folderSet).sort().map((name) => ({
     name,
     shared: isFolderShared(name, sharedFolders, excludedFolders),

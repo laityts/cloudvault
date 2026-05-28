@@ -25,8 +25,10 @@ export async function handleCleanDownload(request: Request, env: Env): Promise<R
   const fileName = decodedPath.substring(lastSlash + 1);
   if (!folder || !fileName) return null;
 
-  const sharedFolders = await getSharedFolders(env);
-  const excludedFolders = await getExcludedFolders(env);
+  const [sharedFolders, excludedFolders] = await Promise.all([
+    getSharedFolders(env),
+    getExcludedFolders(env),
+  ]);
   if (!isFolderShared(folder, sharedFolders, excludedFolders)) return null;
 
   const meta = await findFileByFolderAndName(env, folder, fileName);

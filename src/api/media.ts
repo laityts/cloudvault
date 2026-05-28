@@ -46,11 +46,8 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
   if (!body.ids?.length) return error('No file IDs provided', 400);
   if (body.ids.length > 100) return error('Max 100 files per zip', 400);
 
-  const fileMetas: FileMeta[] = [];
-  for (const id of body.ids) {
-    const meta = await getFile(env, id);
-    if (meta) fileMetas.push(meta);
-  }
+  const fetchedMetas = await Promise.all(body.ids.map((id) => getFile(env, id)));
+  const fileMetas: FileMeta[] = fetchedMetas.filter((m): m is FileMeta => m !== null);
   if (fileMetas.length === 0) return error('No valid files found', 404);
 
   if (fileMetas.length === 1) {
@@ -65,15 +62,24 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
   }
 
   const encoder = new TextEncoder();
+  // Fetch all R2 objects in parallel; preserve order via Promise.all index alignment.
+  // Then read arrayBuffer in parallel as well — both are I/O bound and benefit
+  // from concurrency despite the sequential ZIP assembly that follows.
+  const r2Objects = await Promise.all(fileMetas.map((m) => env.VAULT_BUCKET.get(m.key)));
+  const buffers = await Promise.all(
+    r2Objects.map((o) => (o ? o.arrayBuffer() : Promise.resolve(null))),
+  );
+
   const parts: Uint8Array[] = [];
   const centralDir: Uint8Array[] = [];
   let offset = 0;
 
-  for (const meta of fileMetas) {
-    const object = await env.VAULT_BUCKET.get(meta.key);
-    if (!object) continue;
+  for (let i = 0; i < fileMetas.length; i++) {
+    const meta = fileMetas[i]!;
+    const buf = buffers[i];
+    if (!buf) continue;
 
-    const fileData = new Uint8Array(await object.arrayBuffer());
+    const fileData = new Uint8Array(buf);
     const fileName = encoder.encode(meta.name);
     const crc = crc32(fileData);
 

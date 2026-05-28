@@ -114,10 +114,12 @@ async function serveShareHtml(
 // ─── Public Shared Listing (with folder inheritance) ──────────────────
 
 export async function listPublicShared(_request: Request, env: Env): Promise<Response> {
-  const settings = await getSettings(env);
-  const sharedFolders = await getSharedFolders(env);
-  const excludedFolders = await getExcludedFolders(env);
-  const allFiles = await listAllFiles(env);
+  const [settings, sharedFolders, excludedFolders, allFiles] = await Promise.all([
+    getSettings(env),
+    getSharedFolders(env),
+    getExcludedFolders(env),
+    listAllFiles(env),
+  ]);
 
   const visibleFolders = Array.from(sharedFolders).filter(sf => !excludedFolders.has(sf));
 
@@ -156,8 +158,10 @@ export async function listPublicShared(_request: Request, env: Env): Promise<Res
 export async function browsePublicFolder(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.searchParams.get('path') || '';
-  const sharedFolders = await getSharedFolders(env);
-  const excludedFolders = await getExcludedFolders(env);
+  const [sharedFolders, excludedFolders] = await Promise.all([
+    getSharedFolders(env),
+    getExcludedFolders(env),
+  ]);
 
   if (!path) {
     const visibleFolders = Array.from(sharedFolders).filter(sf => !excludedFolders.has(sf));
@@ -229,10 +233,12 @@ export async function publicDownload(request: Request, env: Env): Promise<Respon
   const meta = await getFile(env, fileId);
   if (!meta) return error('File not found', 404);
 
+  const [sharedFolders, excludedFolders] = await Promise.all([
+    getSharedFolders(env),
+    getExcludedFolders(env),
+  ]);
   const hasPublicLink = !!meta.shareToken && !meta.sharePassword &&
     (!meta.shareExpiresAt || new Date(meta.shareExpiresAt) >= new Date());
-  const sharedFolders = await getSharedFolders(env);
-  const excludedFolders = await getExcludedFolders(env);
   const inSharedFolder = isFolderShared(meta.folder, sharedFolders, excludedFolders);
 
   if (!hasPublicLink && !inSharedFolder) {
