@@ -238,6 +238,8 @@ function DashboardApp() {
     onCleanup(() => window.removeEventListener('keydown', onKey));
   });
 
+  let desktopUploadInput: HTMLInputElement | undefined;
+
   const handleFileInput = (e: Event) => {
     const input = e.currentTarget as HTMLInputElement;
     if (input.files && input.files.length > 0) {
@@ -519,12 +521,23 @@ function DashboardApp() {
               <span class="hidden sm:inline">新建文件夹</span>
             </Button>
             {/* 桌面端上传按钮；移动端用底部 FAB（line 621） */}
-            <label class="hidden md:inline-flex">
-              <Button variant="primary" size="sm" leadingIcon={<IconUpload size={13} />}>
+            <div class="hidden md:inline-flex">
+              <Button
+                variant="primary"
+                size="sm"
+                leadingIcon={<IconUpload size={13} />}
+                onClick={() => desktopUploadInput?.click()}
+              >
                 <span class="hidden sm:inline">上传</span>
               </Button>
-              <input type="file" multiple class="sr-only" onChange={handleFileInput} />
-            </label>
+              <input
+                ref={desktopUploadInput}
+                type="file"
+                multiple
+                class="sr-only"
+                onChange={handleFileInput}
+              />
+            </div>
           </div>
 
           {/* Mobile search */}
@@ -649,14 +662,32 @@ function DashboardApp() {
 
       {/* Sidebar drawer (mobile) */}
       <Drawer open={sidebarOpen()} onClose={() => setSidebarOpen(false)} side="left" width="min(76vw, 240px)">
-        <div class="px-2 py-3 overflow-y-auto safe-pb">
-          <FolderTree
-            store={store}
-            onContextMenu={(e, folderPath) => {
-              const folder = store.folders()?.folders.find((f) => f.name === folderPath);
-              if (folder) folderMenu.open(e, folder);
-            }}
-          />
+        <div class="flex flex-col h-full overflow-y-auto safe-pb">
+          <div class="px-2 py-3">
+            <FolderTree
+              store={store}
+              onContextMenu={(e, folderPath) => {
+                const folder = store.folders()?.folders.find((f) => f.name === folderPath);
+                if (folder) folderMenu.open(e, folder);
+              }}
+            />
+          </div>
+          <div class="mt-auto px-4 pb-4 border-t hairline pt-4">
+            <p class="text-[11px] text-fg-subtle uppercase tracking-wide mb-1.5">存储</p>
+            <div class="h-1.5 rounded-full bg-bg-hover overflow-hidden">
+              <div
+                class="h-full bg-brand"
+                style={{
+                  width: `${Math.min(((store.stats()?.totalSize ?? 0) / (10 * 1024 * 1024 * 1024)) * 100, 100)}%`,
+                }}
+              />
+            </div>
+            <p class="text-[11px] text-fg-muted mt-1.5 tabular">
+              {formatBytes(store.stats()?.totalSize ?? 0)} 已用
+              <span class="text-fg-subtle"> · </span>
+              {store.stats()?.totalFiles ?? 0} 个文件
+            </p>
+          </div>
         </div>
       </Drawer>
 
