@@ -156,7 +156,7 @@ function GuestApp() {
             >
               <Show when={(data()?.folders?.length ?? 0) + (data()?.files?.length ?? 0) > 0}>
                 <div class="mb-4 flex items-center gap-3">
-                  <div class="relative flex-1 max-w-xs">
+                  <div class="relative w-44 sm:w-auto sm:flex-1 sm:max-w-xs">
                     <Input
                       type="search"
                       placeholder="搜索文件…"
