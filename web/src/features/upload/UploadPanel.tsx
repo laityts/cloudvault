@@ -183,6 +183,9 @@ const Row: Component<{
   manager: UploadManager;
   offline: boolean;
 }> = (props) => {
+  const toast = useToast();
+  let reselectInput: HTMLInputElement | undefined;
+
   const isActive = () => props.item.status === 'uploading' || props.item.status === 'pending';
   const isPaused = () => props.item.status === 'paused';
   const isFinished = () =>
@@ -206,7 +209,7 @@ const Row: Component<{
   };
 
   const statusText = () => {
-    if (props.item.needsReselect) return '刷新后请重新选择该文件';
+    if (props.item.needsReselect) return '等待重选文件以续传';
     if (props.item.status === 'paused' && props.item.error === 'offline') return '离线已暂停';
     return STATUS_LABEL[props.item.status];
   };
@@ -249,6 +252,38 @@ const Row: Component<{
         <div class="shrink-0 flex items-center gap-0.5">
           <Show when={props.item.status === 'done'}>
             <IconCheck size={14} class="text-ok mx-1.5" />
+          </Show>
+
+          <Show when={props.item.needsReselect && !props.offline}>
+            <button
+              type="button"
+              onClick={() => reselectInput?.click()}
+              class="inline-flex items-center h-6 px-2 rounded text-[11px] text-brand hover:bg-brand-soft transition-colors"
+              title={`选择 ${props.item.fileName} 以继续`}
+            >
+              选择文件
+            </button>
+            <input
+              ref={reselectInput}
+              type="file"
+              class="sr-only"
+              onChange={(e) => {
+                const file = e.currentTarget.files?.[0];
+                e.currentTarget.value = ''; // 允许再选同一文件
+                if (!file) return;
+                if (file.name !== props.item.fileName) {
+                  toast.error(`文件名不匹配：需要 "${props.item.fileName}"`);
+                  return;
+                }
+                if (file.size !== props.item.fileSize) {
+                  toast.error('文件大小不匹配，可能不是同一文件');
+                  return;
+                }
+                const ok = props.manager.reselect(props.item.id, file);
+                if (ok) toast.success('已恢复上传');
+                else toast.error('恢复失败');
+              }}
+            />
           </Show>
 
           <Show when={isActive()}>
