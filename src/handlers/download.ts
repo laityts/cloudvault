@@ -1,8 +1,8 @@
-import { Env, FileMeta, KV_PREFIX } from '../utils/types';
-import { error, getPreviewType, fetchAssetHtml, injectBranding } from '../utils/response';
+import type { Env, FileMeta } from '../utils/types';
+import { error, getPreviewType, fetchAssetHtml, injectBranding, getMimeType } from '../utils/response';
 import { verifySharePassword, resolveFolderShareToken, browseFolderShareLink, getSharedFolders, getExcludedFolders, isFolderShared } from '../api/share';
 import { getSettings } from '../api/settings';
-import { getMimeType } from '../utils/response';
+import { getFile, getFileByShareToken, findFileByFolderAndName, putFile } from '../db/files';
 
 function extractToken(url: URL): string | null {
   const parts = url.pathname.split('/');
@@ -11,13 +11,8 @@ function extractToken(url: URL): string | null {
 }
 
 async function resolveShare(token: string, env: Env): Promise<{ meta: FileMeta; expired: boolean } | null> {
-  const fileId = await env.VAULT_KV.get(KV_PREFIX.SHARE + token);
-  if (!fileId) return null;
-
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + fileId);
-  if (!raw) return null;
-
-  const meta: FileMeta = JSON.parse(raw);
+  const meta = await getFileByShareToken(env, token);
+  if (!meta) return null;
   const expired = !!meta.shareExpiresAt && new Date(meta.shareExpiresAt) < new Date();
   return { meta, expired };
 }
@@ -90,10 +85,8 @@ export async function handleFolderShareDownload(request: Request, env: Env): Pro
   const fileId = url.searchParams.get('fileId');
   if (!fileId) return error('fileId required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + fileId);
-  if (!raw) return error('File not found', 404);
-
-  const meta: FileMeta = JSON.parse(raw);
+  const meta = await getFile(env, fileId);
+  if (!meta) return error('File not found', 404);
   if (!meta.folder.startsWith(folderLink.folder) && meta.folder !== folderLink.folder) {
     return error('File not in shared folder', 403);
   }
@@ -102,7 +95,7 @@ export async function handleFolderShareDownload(request: Request, env: Env): Pro
   if (!object) return error('File not found in storage', 404);
 
   meta.downloads++;
-  await env.VAULT_KV.put(KV_PREFIX.FILE + meta.id, JSON.stringify(meta));
+  await putFile(env, meta);
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
@@ -127,10 +120,8 @@ export async function handleFolderSharePreview(request: Request, env: Env): Prom
   const fileId = url.searchParams.get('fileId');
   if (!fileId) return error('fileId required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + fileId);
-  if (!raw) return error('File not found', 404);
-
-  const meta: FileMeta = JSON.parse(raw);
+  const meta = await getFile(env, fileId);
+  if (!meta) return error('File not found', 404);
   if (!meta.folder.startsWith(folderLink.folder) && meta.folder !== folderLink.folder) {
     return error('File not in shared folder', 403);
   }
@@ -180,7 +171,7 @@ export async function handleShareDownload(request: Request, env: Env): Promise<R
   if (!object) return error('File not found in storage', 404);
 
   result.meta.downloads++;
-  await env.VAULT_KV.put(KV_PREFIX.FILE + result.meta.id, JSON.stringify(result.meta));
+  await putFile(env, result.meta);
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
@@ -315,7 +306,7 @@ export async function handleSharePassword(request: Request, env: Env): Promise<R
     status: 302,
     headers: {
       Location: '/s/' + token,
-      'Set-Cookie': 'share_' + token + '=verified; Path=/s/' + token + '; HttpOnly; Secure; SameSite=Lax; Max-Age=' + cookieMaxAge,
+      'Set-Cookie': 'share_' + token + '=verified; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=' + cookieMaxAge,
     },
   });
 }
@@ -340,14 +331,14 @@ export async function handleCleanDownload(request: Request, env: Env): Promise<R
   const excludedFolders = await getExcludedFolders(env);
   if (!isFolderShared(folder, sharedFolders, excludedFolders)) return null;
 
-  const meta = await findFileByPath(env, folder, fileName);
+  const meta = await findFileByFolderAndName(env, folder, fileName);
   if (!meta) return null;
 
   const object = await env.VAULT_BUCKET.get(meta.key);
   if (!object) return null;
 
   meta.downloads++;
-  await env.VAULT_KV.put(KV_PREFIX.FILE + meta.id, JSON.stringify(meta));
+  await putFile(env, meta);
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
@@ -360,20 +351,4 @@ export async function handleCleanDownload(request: Request, env: Env): Promise<R
   headers.set('Content-Disposition', 'attachment; filename="' + encodeURIComponent(meta.name) + '"');
 
   return new Response(object.body, { headers });
-}
-
-async function findFileByPath(env: Env, folder: string, fileName: string): Promise<FileMeta | null> {
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: KV_PREFIX.FILE, limit: 1000, cursor });
-    for (const key of result.keys) {
-      const raw = await env.VAULT_KV.get(key.name);
-      if (!raw) continue;
-      const meta: FileMeta = JSON.parse(raw);
-      if (meta.folder === folder && meta.name === fileName) return meta;
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
-  return null;
 }
