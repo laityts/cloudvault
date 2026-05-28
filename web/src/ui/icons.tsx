@@ -218,4 +218,21 @@ export const IconLogo = (p: Props) => (
 export const IconRefresh = (p: Props) => (
   <Icon {...p} d={['M3 12a9 9 0 019-9 9 9 0 016.5 2.8L21 8', 'M21 3v5h-5', 'M21 12a9 9 0 01-9 9 9 9 0 01-6.5-2.8L3 16', 'M3 21v-5h5']} />
 );
+export const IconPause = (p: Props) => (
+  <Icon {...p} d={['M9 5v14', 'M15 5v14']} />
+);
+export const IconPlay = (p: Props) => (
+  <Icon {...p} d="M7 5l12 7-12 7z" />
+);
+export const IconWifiOff = (p: Props) => (
+  <Icon
+    {...p}
+    d={[
+      'M3 3l18 18',
+      'M9.5 17a3.5 3.5 0 015 0',
+      'M5.5 12.5a8 8 0 0110.7-1',
+      'M2 8.5a13 13 0 0118.5-1.5',
+    ]}
+  />
+);
 export const IconBack = (p: Props) => <Icon {...p} d={['M19 12H5', 'M12 19l-7-7 7-7']} />;

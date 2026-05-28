@@ -135,6 +135,9 @@ function DashboardApp() {
   const uploadManager = new UploadManager();
   const [uploads, setUploads] = createSignal<UploadItem[]>([]);
   const [showUploadPanel, setShowUploadPanel] = createSignal(false);
+  const [offline, setOffline] = createSignal(
+    typeof navigator !== 'undefined' && navigator.onLine === false,
+  );
 
   // Share manager drawer
   const [shareManagerOpen, setShareManagerOpen] = createSignal(false);
@@ -151,6 +154,15 @@ function DashboardApp() {
     };
     window.addEventListener('upload-complete', onComplete);
     onCleanup(() => window.removeEventListener('upload-complete', onComplete));
+
+    const onOnline = () => setOffline(false);
+    const onOffline = () => setOffline(true);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    onCleanup(() => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    });
 
     // Drag-drop globally
     let counter = 0;
@@ -392,6 +404,7 @@ function DashboardApp() {
 
           <UploadHeaderButton
             uploads={uploads()}
+            offline={offline()}
             active={showUploadPanel()}
             onClick={() => setShowUploadPanel((v) => !v)}
           />
@@ -774,8 +787,9 @@ function DashboardApp() {
       {/* Upload panel */}
       <Show when={showUploadPanel()}>
         <UploadPanel
+          manager={uploadManager}
           items={uploads()}
-          onClear={() => uploadManager.clearCompleted()}
+          offline={offline()}
           onClose={() => setShowUploadPanel(false)}
         />
       </Show>
@@ -785,16 +799,26 @@ function DashboardApp() {
 
 const UploadHeaderButton: Component<{
   uploads: UploadItem[];
+  offline: boolean;
   active: boolean;
   onClick: () => void;
 }> = (props) => {
   const inFlight = () =>
     props.uploads.filter((u) => u.status === 'uploading' || u.status === 'pending').length;
+  const paused = () => props.uploads.filter((u) => u.status === 'paused').length;
   const failed = () => props.uploads.filter((u) => u.status === 'error').length;
+
+  const label = () => {
+    if (props.offline && (inFlight() + paused()) > 0) return `上传任务（离线已暂停 ${paused()}）`;
+    if (inFlight() > 0) return `上传任务（${inFlight()} 进行中）`;
+    if (paused() > 0) return `上传任务（${paused()} 已暂停）`;
+    if (failed() > 0) return `上传任务（${failed()} 失败）`;
+    return '上传任务';
+  };
 
   return (
     <IconButton
-      label={inFlight() > 0 ? `上传任务（${inFlight()} 进行中）` : '上传任务'}
+      label={label()}
       size="sm"
       active={props.active}
       onClick={props.onClick}
@@ -806,7 +830,12 @@ const UploadHeaderButton: Component<{
           {inFlight()}
         </span>
       </Show>
-      <Show when={inFlight() === 0 && failed() > 0}>
+      <Show when={inFlight() === 0 && paused() > 0}>
+        <span class="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[15px] h-[15px] px-[3px] rounded-full bg-warn text-white text-[9.5px] font-semibold tabular leading-none ring-2 ring-bg-base">
+          {paused()}
+        </span>
+      </Show>
+      <Show when={inFlight() === 0 && paused() === 0 && failed() > 0}>
         <span class="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[15px] h-[15px] px-[3px] rounded-full bg-danger text-white text-[9.5px] font-semibold tabular leading-none ring-2 ring-bg-base">
           {failed()}
         </span>
