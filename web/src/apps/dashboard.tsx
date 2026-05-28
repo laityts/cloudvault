@@ -6,6 +6,7 @@ import {
   createSignal,
   onCleanup,
   onMount,
+  type Component,
 } from 'solid-js';
 import '~/styles/global.css';
 import { bootstrapTheme, createTheme } from '~/stores/theme';
@@ -60,6 +61,7 @@ import { createDashboardStore } from '~/features/dashboard/store';
 import { FolderTree } from '~/features/dashboard/FolderTree';
 import { FileGrid, FileTable } from '~/features/dashboard/FileViews';
 import { FilePreviewDialog } from '~/features/dashboard/FilePreviewDialog';
+import { ShareManagerDrawer } from '~/features/dashboard/ShareManagerDrawer';
 import {
   ConfirmDialog,
   FolderShareLinkDialog,
@@ -133,6 +135,9 @@ function DashboardApp() {
   const uploadManager = new UploadManager();
   const [uploads, setUploads] = createSignal<UploadItem[]>([]);
   const [showUploadPanel, setShowUploadPanel] = createSignal(false);
+
+  // Share manager drawer
+  const [shareManagerOpen, setShareManagerOpen] = createSignal(false);
 
   onMount(() => {
     const unsub = uploadManager.subscribe((s) => {
@@ -385,6 +390,14 @@ function DashboardApp() {
 
           <div class="flex-1" />
 
+          <UploadHeaderButton
+            uploads={uploads()}
+            active={showUploadPanel()}
+            onClick={() => setShowUploadPanel((v) => !v)}
+          />
+          <IconButton label="分享管理" onClick={() => setShareManagerOpen(true)} active={shareManagerOpen()} size="md">
+            <IconLink size={16} />
+          </IconButton>
           <ThemeToggle theme={theme()} onToggle={toggle} size="md" />
           <IconButton label="Settings" onClick={() => setSettingsOpen(true)} size="md">
             <IconSettings size={16} />
@@ -619,6 +632,19 @@ function DashboardApp() {
         </div>
       </Drawer>
 
+      {/* Share manager drawer */}
+      <ShareManagerDrawer
+        open={shareManagerOpen()}
+        onClose={() => setShareManagerOpen(false)}
+        onNavigate={(folder, fileId) => {
+          store.setCurrentFolder(folder || 'root');
+          if (fileId) {
+            // Wait for file list to refresh, then select the file.
+            setTimeout(() => store.toggleSelect(fileId), 200);
+          }
+        }}
+      />
+
       {/* Context menus */}
       <ResponsiveMenu
         open={fileMenu.state().open}
@@ -746,7 +772,7 @@ function DashboardApp() {
       />
 
       {/* Upload panel */}
-      <Show when={uploads().length > 0 && showUploadPanel()}>
+      <Show when={showUploadPanel()}>
         <UploadPanel
           items={uploads()}
           onClear={() => uploadManager.clearCompleted()}
@@ -756,6 +782,38 @@ function DashboardApp() {
     </div>
   );
 }
+
+const UploadHeaderButton: Component<{
+  uploads: UploadItem[];
+  active: boolean;
+  onClick: () => void;
+}> = (props) => {
+  const inFlight = () =>
+    props.uploads.filter((u) => u.status === 'uploading' || u.status === 'pending').length;
+  const failed = () => props.uploads.filter((u) => u.status === 'error').length;
+
+  return (
+    <IconButton
+      label={inFlight() > 0 ? `上传任务（${inFlight()} 进行中）` : '上传任务'}
+      size="md"
+      active={props.active}
+      onClick={props.onClick}
+      class="relative"
+    >
+      <IconUpload size={16} />
+      <Show when={inFlight() > 0}>
+        <span class="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-brand text-fg-onAccent text-[10px] font-semibold tabular">
+          {inFlight()}
+        </span>
+      </Show>
+      <Show when={inFlight() === 0 && failed() > 0}>
+        <span class="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-danger text-white text-[10px] font-semibold tabular">
+          {failed()}
+        </span>
+      </Show>
+    </IconButton>
+  );
+};
 
 render(
   () => (
