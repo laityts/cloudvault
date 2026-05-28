@@ -231,6 +231,33 @@ export class UploadManager {
 
   // ── 单项控制 ──────────────────────────────────────────────────────────
 
+  /**
+   * 把用户重新选择的 File 绑定到 needsReselect 项上，校验 name + size 匹配后
+   * 立即转 pending 让队列恢复该任务。multipart 项会用上次保存的 uploadId 与
+   * completedParts 续传，不重新上传已完成的 parts。
+   *
+   * @returns true 表示绑定成功并已恢复；false 表示尺寸/名字不匹配（已 toast 在 UI 层处理）
+   */
+  reselect(id: string, file: File): boolean {
+    const item = this.queue.find((q) => q.id === id);
+    if (!item) return false;
+    if (!item.needsReselect) return false;
+    if (file.name !== item.fileName || file.size !== item.fileSize) return false;
+    if (this.offline) return false;
+
+    item.file = file;
+    item.needsReselect = false;
+    item.error = undefined;
+    item.status = 'pending';
+    const state = this.intern(item.id);
+    state.paused = false;
+    state.canceled = false;
+    state.abort = undefined;
+    this.emit();
+    this.processQueue();
+    return true;
+  }
+
   pause(id: string): void {
     const item = this.queue.find((q) => q.id === id);
     if (!item) return;
