@@ -62,10 +62,10 @@ A personal cloud storage platform built on **Cloudflare Workers + R2**. Zero ser
 |------|------|
 | 运行时 | [Cloudflare Workers](https://workers.cloudflare.com/) |
 | 文件存储 | [Cloudflare R2](https://developers.cloudflare.com/r2/)（S3 兼容对象存储） |
-| 元数据 | [Cloudflare KV](https://developers.cloudflare.com/kv/)（键值存储） |
-| 前端 | Alpine.js + Tailwind CSS（CDN 加载） |
+| 元数据 | [Cloudflare D1](https://developers.cloudflare.com/d1/)（SQLite） |
+| 前端 | Solid.js + TypeScript + Tailwind CSS + Vite |
 | 协议 | WebDAV Class 1（RFC 4918） |
-| 语言 | TypeScript（后端）、JavaScript（前端） |
+| 语言 | TypeScript（前后端统一） |
 
 ### 快速开始
 
@@ -124,6 +124,13 @@ npm run deploy
 #### 本地开发
 
 ```bash
+# 仅前端热重载（Vite dev server，端口 5173，API/auth 自动代理到 8787）
+npm run dev:web
+
+# 在另一个终端启动 worker
+npm run dev:worker
+
+# 或一次构建前端 + 启动 worker（无热更）
 npm run dev
 ```
 
@@ -133,6 +140,16 @@ npm run dev
 ADMIN_PASSWORD=your-local-password
 SESSION_SECRET=your-local-secret
 ```
+
+#### 构建与部署
+
+```bash
+npm run build:web   # 仅构建前端到 public/
+npm run deploy      # 构建前端 + wrangler deploy
+npm run typecheck   # 检查前后端 TypeScript
+```
+
+前端构建产物会输出到 `public/`，由 wrangler 直接服务。`web/` 目录是前端源码（Solid.js + TS + Tailwind v4 via Vite，多页面入口）。
 
 ### 项目结构
 
@@ -153,17 +170,27 @@ cloudvault/
 │       ├── types.ts          # TypeScript 类型 & KV 前缀
 │       ├── response.ts       # JSON/错误/重定向工具函数
 │       └── webdav-xml.ts     # WebDAV XML 响应构建
-├── public/
-│   ├── dashboard.html        # 管理后台
-│   ├── guest.html            # 访客页面
-│   ├── login.html            # 登录页
-│   ├── share.html            # 分享链接页
-│   ├── js/                   # 前端 JavaScript
-│   └── css/                  # 样式表
-├── wrangler.jsonc            # Wrangler 配置（gitignored）
-├── wrangler.example.jsonc    # 示例配置模板
+├── public/                  # 构建产物（由 web/ 经 vite 生成，wrangler 服务）
+│   ├── dashboard.html / login.html / share.html / guest.html / 404.html
+│   └── assets/              # JS / CSS 哈希分包
+├── web/                     # 前端源码（Solid + TS + Tailwind）
+│   ├── *.html               # 5 个 Vite 入口页
+│   └── src/
+│       ├── apps/            # 页面入口（dashboard/login/share/guest/notfound）
+│       ├── ui/              # 通用组件（Dialog/Drawer/Toast/Lightbox/...）
+│       ├── features/        # 业务模块（dashboard store、upload manager）
+│       ├── api/             # 类型化 API 客户端
+│       ├── stores/          # theme / branding
+│       ├── lib/             # 工具（cn、format、media、longpress、fileKind）
+│       └── styles/          # tokens.css + global.css
+├── vite.config.ts           # 多页面 Vite 配置
+├── tailwind.config.ts       # Tailwind v3 设计系统
+├── postcss.config.js
+├── wrangler.jsonc           # Wrangler 配置（gitignored）
+├── wrangler.example.jsonc
 ├── package.json
-├── tsconfig.json
+├── tsconfig.json            # 后端 TS 配置
+├── web/tsconfig.json        # 前端 TS 配置
 └── LICENSE
 ```
 
@@ -247,10 +274,10 @@ cloudvault/
 |-------|-----------|
 | Runtime | [Cloudflare Workers](https://workers.cloudflare.com/) |
 | Storage | [Cloudflare R2](https://developers.cloudflare.com/r2/) (S3-compatible object storage) |
-| Metadata | [Cloudflare KV](https://developers.cloudflare.com/kv/) (key-value store) |
-| Frontend | Alpine.js + Tailwind CSS (CDN) |
+| Metadata | [Cloudflare D1](https://developers.cloudflare.com/d1/) (SQLite) |
+| Frontend | Solid.js + TypeScript + Tailwind CSS + Vite |
 | Protocol | WebDAV Class 1 (RFC 4918) |
-| Language | TypeScript (backend), JavaScript (frontend) |
+| Language | TypeScript (frontend & backend) |
 
 ### Quick Start
 
@@ -309,6 +336,13 @@ Your CloudVault instance is now live at `https://cloudvault.<your-subdomain>.wor
 #### Local Development
 
 ```bash
+# Frontend hot reload (Vite, port 5173, /api & /auth proxied to 8787)
+npm run dev:web
+
+# Worker in another terminal
+npm run dev:worker
+
+# Or build frontend once + start worker (no HMR)
 npm run dev
 ```
 
@@ -318,6 +352,16 @@ Create a `.dev.vars` file for local secrets:
 ADMIN_PASSWORD=your-local-password
 SESSION_SECRET=your-local-secret
 ```
+
+#### Build & Deploy
+
+```bash
+npm run build:web   # Build frontend into public/
+npm run deploy      # Build frontend + wrangler deploy
+npm run typecheck   # Check both frontend and backend TypeScript
+```
+
+Frontend output goes into `public/`, served directly by wrangler. The `web/` directory contains source (Solid.js + TS + Tailwind v4 via Vite, multi-page entries).
 
 ### Project Structure
 
@@ -338,17 +382,27 @@ cloudvault/
 │       ├── types.ts          # TypeScript types & KV prefixes
 │       ├── response.ts       # JSON/error/redirect helpers
 │       └── webdav-xml.ts     # WebDAV XML response builders
-├── public/
-│   ├── dashboard.html        # Admin dashboard
-│   ├── guest.html            # Public guest page
-│   ├── login.html            # Login page
-│   ├── share.html            # Share link page
-│   ├── js/                   # Frontend JavaScript
-│   └── css/                  # Stylesheets
-├── wrangler.jsonc            # Wrangler config (gitignored)
-├── wrangler.example.jsonc    # Example config template
+├── public/                  # Build output (generated from web/, served by wrangler)
+│   ├── dashboard.html / login.html / share.html / guest.html / 404.html
+│   └── assets/              # Hashed JS / CSS chunks
+├── web/                     # Frontend source (Solid + TS + Tailwind)
+│   ├── *.html               # 5 Vite entry pages
+│   └── src/
+│       ├── apps/            # Page entries (dashboard/login/share/guest/notfound)
+│       ├── ui/              # Shared components (Dialog/Drawer/Toast/Lightbox/...)
+│       ├── features/        # Feature modules (dashboard store, upload manager)
+│       ├── api/             # Typed API client
+│       ├── stores/          # theme / branding
+│       ├── lib/             # Utilities (cn, format, media, longpress, fileKind)
+│       └── styles/          # tokens.css + global.css
+├── vite.config.ts           # Multi-page Vite config
+├── tailwind.config.ts       # Tailwind design system
+├── postcss.config.js
+├── wrangler.jsonc           # Wrangler config (gitignored)
+├── wrangler.example.jsonc
 ├── package.json
-├── tsconfig.json
+├── tsconfig.json            # Backend TS config
+├── web/tsconfig.json        # Frontend TS config
 └── LICENSE
 ```
 
