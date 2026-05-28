@@ -1,4 +1,4 @@
-import { For, type Component } from 'solid-js';
+import { For, Show, type Component } from 'solid-js';
 import { cn } from '~/lib/cn';
 import { ProgressBar, IconCheck, IconWarning, IconClose, IconUpload } from '~/ui';
 import type { UploadItem } from './uploadManager';
@@ -27,13 +27,15 @@ export const UploadPanel: Component<{
           </span>
         </div>
         <div class="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => props.onClear()}
-            class="text-[11px] text-fg-muted hover:text-fg px-1.5 h-7 rounded"
-          >
-            清除
-          </button>
+          <Show when={totalCount() > 0}>
+            <button
+              type="button"
+              onClick={() => props.onClear()}
+              class="text-[11px] text-fg-muted hover:text-fg px-1.5 h-7 rounded"
+            >
+              清除
+            </button>
+          </Show>
           <button
             type="button"
             onClick={() => props.onClose()}
@@ -44,35 +46,44 @@ export const UploadPanel: Component<{
           </button>
         </div>
       </div>
-      <ul class="max-h-60 overflow-y-auto">
-        <For each={props.items}>
-          {(item) => (
-            <li class="px-3.5 py-2 border-b hairline last:border-b-0">
-              <div class="flex items-center gap-2">
-                <div class="flex-1 min-w-0">
-                  <div class="text-[12px] font-medium truncate" title={item.file.name}>
-                    {item.file.name}
+      <Show
+        when={totalCount() > 0}
+        fallback={
+          <div class="px-4 py-8 text-center text-[12px] text-fg-subtle">
+            暂无上传任务
+          </div>
+        }
+      >
+        <ul class="max-h-60 overflow-y-auto">
+          <For each={props.items}>
+            {(item) => (
+              <li class="px-3.5 py-2 border-b hairline last:border-b-0">
+                <div class="flex items-center gap-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="text-[12px] font-medium truncate" title={item.file.name}>
+                      {item.file.name}
+                    </div>
+                    <ProgressBar
+                      class="mt-1"
+                      value={item.progress}
+                      status={item.status === 'done' ? 'done' : item.status === 'error' ? 'error' : 'active'}
+                    />
                   </div>
-                  <ProgressBar
-                    class="mt-1"
-                    value={item.progress}
-                    status={item.status === 'done' ? 'done' : item.status === 'error' ? 'error' : 'active'}
-                  />
+                  <span class="shrink-0 w-7 text-right tabular text-[11px]">
+                    {item.status === 'done' ? (
+                      <IconCheck size={14} class="text-ok inline" />
+                    ) : item.status === 'error' ? (
+                      <IconWarning size={14} class="text-danger inline" />
+                    ) : (
+                      `${item.progress}%`
+                    )}
+                  </span>
                 </div>
-                <span class="shrink-0 w-7 text-right tabular text-[11px]">
-                  {item.status === 'done' ? (
-                    <IconCheck size={14} class="text-ok inline" />
-                  ) : item.status === 'error' ? (
-                    <IconWarning size={14} class="text-danger inline" />
-                  ) : (
-                    `${item.progress}%`
-                  )}
-                </span>
-              </div>
-            </li>
-          )}
-        </For>
-      </ul>
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
     </div>
   );
 };

@@ -48,6 +48,36 @@ export interface FolderShareLinkInfo {
   expiresAt: string | null;
 }
 
+// ─── Share Manager 聚合视图 ─────────────────────────────────────────────
+
+export interface SharedFileEntry {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  folder: string;
+  uploadedAt: string;
+  shareToken: string;
+  hasPassword: boolean;
+  shareExpiresAt: string | null;
+  downloads: number;
+}
+
+export interface FolderShareLinkEntry {
+  token: string;
+  folder: string;
+  hasPassword: boolean;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+export interface SharesResponse {
+  files: SharedFileEntry[];
+  folderLinks: FolderShareLinkEntry[];
+  sharedFolders: string[];
+  excludedFolders: string[];
+}
+
 // ─── Public (guest) listing payloads ─────────────────────────────────────
 
 export interface PublicFile {

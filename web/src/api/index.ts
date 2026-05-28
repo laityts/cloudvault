@@ -5,6 +5,7 @@ import type {
   StatsResponse,
   SiteSettings,
   FolderShareLinkInfo,
+  SharesResponse,
   PublicSharedResponse,
   PublicFolderResponse,
   MultipartCreateResponse,
@@ -114,6 +115,10 @@ export function createShare(req: CreateShareRequest) {
 
 export function revokeShare(fileId: string) {
   return apiFetch<{ message: string }>(`/api/share/${fileId}`, { method: 'DELETE' });
+}
+
+export function listShares(): Promise<SharesResponse> {
+  return apiFetch('/api/shares');
 }
 
 // ─── Share (folder link) ─────────────────────────────────────────────────
