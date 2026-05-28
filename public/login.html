@@ -1,145 +1,30 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
-  <title>CloudVault — Login</title>
-  <script>try{var _b=JSON.parse(document.getElementById('branding-data')?.textContent||'{}');if(_b.siteName)document.title=_b.siteName+' — Login'}catch{}</script>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            accent: { 50:'#e0fbff',100:'#b3f5ff',200:'#80eeff',300:'#4de7ff',400:'#00E5FF',500:'#00E5FF',600:'#00b8cc',700:'#008a99',800:'#005d66',900:'#002f33' },
-            warm: '#FFB800'
-          },
-          fontFamily: {
-            mono: ["'JetBrains Mono'", "'Noto Sans SC'", 'monospace'],
-            sans: ["'Outfit'", "'Noto Sans SC'", '-apple-system', 'sans-serif']
-          },
-          borderRadius: { sm: '4px', DEFAULT: '6px', md: '8px', lg: '10px', xl: '12px' }
-        }
-      }
-    }
-    }
-  </script>
-  <style>
-    @keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-    .fade-up { animation: fadeUp 0.5s ease-out; }
-    @keyframes shake { 10%,90% { transform: translateX(-1px); } 20%,80% { transform: translateX(2px); } 30%,50%,70% { transform: translateX(-3px); } 40%,60% { transform: translateX(3px); } }
-    .shake { animation: shake 0.5s ease-in-out; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .spinner { animation: spin 0.6s linear infinite; }
-  </style>
-  <link rel="stylesheet" href="/css/app.css">
-</head>
-<body style="font-family:var(--font-body)" class="min-h-screen flex items-center justify-center p-4">
-<div class="glow-orbs"></div>
-  <div class="fade-up w-full max-w-sm">
-    <div class="text-center mb-8">
-      <div id="brand-icon" class="inline-flex items-center justify-center w-16 h-16 rounded-lg bg-transparent border border-accent-400/20 mb-4">
-        <svg class="w-8 h-8 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z"/>
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 12.75v3m0 0l-1.5-1.5m1.5 1.5l1.5-1.5"/>
-        </svg>
-      </div>
-      <h1 id="brand-name" class="text-2xl font-bold text-[var(--text-primary)]">CloudVault</h1>
-      <p class="text-[var(--text-muted)] text-sm mt-1">Personal Cloud Storage</p>
-    </div>
-
-    <form id="login-form" class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-6 shadow-2xl">
-      <div id="error-box" class="hidden mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm text-center"></div>
-
-      <div class="mb-5">
-        <label for="password" class="block text-sm font-medium text-[var(--text-secondary)] mb-2">Password</label>
-        <input
-          type="password"
-          id="password"
-          name="password"
-          placeholder="Enter your password"
-          required
-          autofocus
-          class="w-full px-4 py-3 rounded-md bg-[var(--bg-tertiary)] border border-[var(--border-light)] text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-accent-400 focus:border-transparent transition-all"
-        >
-      </div>
-
-      <button
-        type="submit"
-        id="submit-btn"
-        class="w-full py-3 px-4 rounded-md bg-transparent border border-accent-400 text-accent-400 hover:bg-accent-400/10 hover:shadow-[0_0_20px_rgba(0,229,255,0.15)] font-medium transition-all focus:outline-none focus:ring-2 focus:ring-accent-400 focus:ring-offset-2 focus:ring-offset-[var(--bg-primary)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-      >
-        <span id="btn-text">Sign In</span>
-        <svg id="btn-spinner" class="hidden spinner w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-      </button>
-    </form>
-
-    <p class="text-center text-[var(--text-muted)] text-xs mt-6">Powered by <a href="https://github.com/zqs1qiwan/cloudvault" target="_blank" rel="noopener" class="hover:text-[var(--text-secondary)] underline">zqs1qiwan/CloudVault</a></p>
-  </div>
-
-  <script>
-    (function() {
+<html lang="zh-CN" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f1218" />
+    <title>CloudVault — Login</title>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    />
+    <script>
       try {
-        var b = JSON.parse(document.getElementById('branding-data')?.textContent || '{}');
-        if (b.siteName) document.getElementById('brand-name').textContent = b.siteName;
-        if (b.siteIconUrl) {
-          var iconEl = document.getElementById('brand-icon');
-          iconEl.innerHTML = '<img src="' + b.siteIconUrl + '" class="w-12 h-12 object-contain">';
-        }
-        // Note: Do NOT overwrite the "Powered by" attribution footer
+        var t = localStorage.getItem('cv-theme');
+        if (!t) t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        document.documentElement.classList.remove('dark', 'light');
+        document.documentElement.classList.add(t);
       } catch {}
-    })();
-
-    const form = document.getElementById('login-form');
-    const errorBox = document.getElementById('error-box');
-    const submitBtn = document.getElementById('submit-btn');
-    const btnText = document.getElementById('btn-text');
-    const btnSpinner = document.getElementById('btn-spinner');
-
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      errorBox.classList.add('hidden');
-      submitBtn.disabled = true;
-      btnText.textContent = 'Signing in...';
-      btnSpinner.classList.remove('hidden');
-
-      try {
-        const res = await fetch('/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams(new FormData(form)),
-          credentials: 'same-origin',
-          redirect: 'follow',
-        });
-
-        if (res.redirected) {
-          window.location.href = res.url;
-          return;
-        }
-
-        if (res.ok) {
-          window.location.href = '/admin';
-          return;
-        }
-
-        const data = await res.json().catch(() => ({ error: 'Invalid password' }));
-        errorBox.textContent = data.error || 'Invalid password';
-        errorBox.classList.remove('hidden');
-        form.classList.add('shake');
-        setTimeout(() => form.classList.remove('shake'), 500);
-      } catch {
-        errorBox.textContent = 'Connection error. Please try again.';
-        errorBox.classList.remove('hidden');
-      } finally {
-        submitBtn.disabled = false;
-        btnText.textContent = 'Sign In';
-        btnSpinner.classList.add('hidden');
-      }
-    });
-  </script>
-</body>
+    </script>
+    <script type="module" crossorigin src="/assets/login-CJ73A44y.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/Lightbox-zkTNC2if.js">
+    <link rel="modulepreload" crossorigin href="/assets/ThemeToggle-wdpbuYjm.js">
+    <link rel="modulepreload" crossorigin href="/assets/index-ybBUR9vZ.js">
+    <link rel="stylesheet" crossorigin href="/assets/Lightbox-4A3caOKv.css">
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
 </html>

@@ -1,0 +1,89 @@
+/* CloudVault — Design Tokens
+ * OKLCH color space, tinted neutrals, single restrained brand accent.
+ * Dark mode is the default; .light flips the palette.
+ */
+
+:root,
+html.dark {
+  /* Surfaces — depth via lightness, tinted with cold neutral hue */
+  --bg-base: oklch(17.5% 0.009 250);
+  --bg-surface: oklch(20.5% 0.009 250);
+  --bg-raised: oklch(24% 0.010 250);
+  --bg-hover: oklch(28% 0.012 250);
+  --bg-inset: oklch(14% 0.007 250);
+
+  /* Foreground — high contrast text, muted descenders */
+  --fg-default: oklch(94% 0.005 250);
+  --fg-muted: oklch(72% 0.012 250);
+  --fg-subtle: oklch(54% 0.012 250);
+  --fg-on-accent: oklch(99% 0.003 250);
+
+  /* Lines — thin separators, faint by default */
+  --line: oklch(30% 0.011 250);
+  --line-strong: oklch(40% 0.014 250);
+
+  /* Brand — restrained steel blue, not neon */
+  --brand: oklch(70% 0.13 245);
+  --brand-soft: oklch(70% 0.13 245 / 0.14);
+  --brand-hover: oklch(76% 0.12 245);
+
+  /* Status — restrained saturation */
+  --ok: oklch(72% 0.15 150);
+  --ok-soft: oklch(72% 0.15 150 / 0.14);
+  --warn: oklch(80% 0.16 80);
+  --warn-soft: oklch(80% 0.16 80 / 0.14);
+  --danger: oklch(67% 0.20 25);
+  --danger-soft: oklch(67% 0.20 25 / 0.14);
+  --info: oklch(73% 0.13 230);
+  --info-soft: oklch(73% 0.13 230 / 0.14);
+
+  /* Type-pill hues (file categories) */
+  --pill-image: oklch(72% 0.16 350);
+  --pill-video: oklch(68% 0.16 290);
+  --pill-audio: oklch(72% 0.16 165);
+  --pill-doc: oklch(70% 0.14 240);
+  --pill-archive: oklch(78% 0.16 85);
+  --pill-code: oklch(72% 0.18 50);
+  --pill-other: oklch(70% 0.012 250);
+
+  color-scheme: dark;
+}
+
+html.light {
+  --bg-base: oklch(98.5% 0.004 250);
+  --bg-surface: oklch(100% 0 0);
+  --bg-raised: oklch(99% 0.003 250);
+  --bg-hover: oklch(95.5% 0.006 250);
+  --bg-inset: oklch(96.5% 0.005 250);
+
+  --fg-default: oklch(22% 0.014 250);
+  --fg-muted: oklch(46% 0.012 250);
+  --fg-subtle: oklch(62% 0.010 250);
+  --fg-on-accent: oklch(99% 0.002 250);
+
+  --line: oklch(92% 0.008 250);
+  --line-strong: oklch(86% 0.010 250);
+
+  --brand: oklch(54% 0.16 245);
+  --brand-soft: oklch(54% 0.16 245 / 0.10);
+  --brand-hover: oklch(48% 0.17 245);
+
+  --ok: oklch(54% 0.16 150);
+  --ok-soft: oklch(54% 0.16 150 / 0.10);
+  --warn: oklch(58% 0.16 65);
+  --warn-soft: oklch(58% 0.16 65 / 0.10);
+  --danger: oklch(54% 0.21 25);
+  --danger-soft: oklch(54% 0.21 25 / 0.10);
+  --info: oklch(56% 0.15 230);
+  --info-soft: oklch(56% 0.15 230 / 0.10);
+
+  --pill-image: oklch(58% 0.18 350);
+  --pill-video: oklch(54% 0.18 290);
+  --pill-audio: oklch(56% 0.16 165);
+  --pill-doc: oklch(54% 0.16 240);
+  --pill-archive: oklch(64% 0.17 65);
+  --pill-code: oklch(58% 0.18 50);
+  --pill-other: oklch(55% 0.012 250);
+
+  color-scheme: light;
+}
