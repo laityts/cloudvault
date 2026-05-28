@@ -1,4 +1,4 @@
-import { Env, FileMeta, KV_PREFIX } from '../utils/types';
+import type { Env, FileMeta } from '../utils/types';
 import { getMimeType } from '../utils/response';
 import {
   multistatusResponse,
@@ -8,6 +8,22 @@ import {
   folderToProps,
   folderToHref,
 } from '../utils/webdav-xml';
+import {
+  getFile,
+  putFile,
+  deleteFile,
+  findFileByFolderAndName,
+  listFilesInFolder,
+  listFilesByFolderPrefix,
+  listAllFiles,
+} from '../db/files';
+import {
+  getFolder,
+  putFolder,
+  deleteFolder as dbDeleteFolder,
+  deleteFoldersByPrefix,
+  listAllFolders,
+} from '../db/folders';
 
 const DAV_PREFIX = '/dav/';
 const DAV_METHODS = 'OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE, COPY';
@@ -31,61 +47,17 @@ function toR2Key(folder: string, name: string): string {
   return folder === 'root' ? name : folder + '/' + name;
 }
 
-async function getAllFiles(env: Env): Promise<FileMeta[]> {
-  const files: FileMeta[] = [];
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: KV_PREFIX.FILE, limit: 1000, cursor });
-    for (const key of result.keys) {
-      const raw = await env.VAULT_KV.get(key.name);
-      if (raw) {
-        try { files.push(JSON.parse(raw)); } catch { /* skip */ }
-      }
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
-  return files;
-}
-
-async function getAllFolders(env: Env): Promise<Map<string, string>> {
-  const folders = new Map<string, string>();
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: 'folder:', limit: 1000, cursor });
-    for (const key of result.keys) {
-      const name = key.name.replace('folder:', '');
-      const raw = await env.VAULT_KV.get(key.name);
-      let createdAt = '';
-      if (raw) {
-        try { createdAt = JSON.parse(raw).createdAt || ''; } catch { /* skip */ }
-      }
-      if (name) folders.set(name, createdAt);
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
-  return folders;
-}
-
-async function updateStatsCounters(env: Env, sizeDelta: number, countDelta: number): Promise<void> {
-  const [rawSize, rawCount] = await Promise.all([
-    env.VAULT_KV.get(KV_PREFIX.STATS + 'totalSize'),
-    env.VAULT_KV.get(KV_PREFIX.STATS + 'totalFiles'),
-  ]);
-  const newSize = Math.max(0, (parseInt(rawSize || '0', 10) + sizeDelta));
-  const newCount = Math.max(0, (parseInt(rawCount || '0', 10) + countDelta));
-  await Promise.all([
-    env.VAULT_KV.put(KV_PREFIX.STATS + 'totalSize', String(newSize)),
-    env.VAULT_KV.put(KV_PREFIX.STATS + 'totalFiles', String(newCount)),
-  ]);
+async function getFoldersMap(env: Env): Promise<Map<string, string>> {
+  const records = await listAllFolders(env);
+  const map = new Map<string, string>();
+  for (const r of records) map.set(r.path, r.createdAt);
+  return map;
 }
 
 async function findFileByDavPath(env: Env, davPath: string): Promise<FileMeta | null> {
   const folder = toFolder(davPath);
   const name = toFileName(davPath);
-  const allFiles = await getAllFiles(env);
-  return allFiles.find(f => f.folder === folder && f.name === name) || null;
+  return findFileByFolderAndName(env, folder, name);
 }
 
 export async function handleWebDav(request: Request, env: Env): Promise<Response> {
@@ -135,8 +107,8 @@ async function handlePropfind(request: Request, env: Env): Promise<Response> {
     ]);
   }
 
-  const folders = await getAllFolders(env);
-  const allFiles = await getAllFiles(env);
+  const folders = await getFoldersMap(env);
+  const allFiles = await listAllFiles(env);
 
   if (!isDirPath(davPath, folders, allFiles)) {
     return new Response('Not Found', { status: 404 });
@@ -147,7 +119,7 @@ async function handlePropfind(request: Request, env: Env): Promise<Response> {
   ];
 
   if (depth !== '0') {
-    const directFiles = allFiles.filter(f => f.folder === davPath);
+    const directFiles = await listFilesInFolder(env, davPath);
     for (const f of directFiles) {
       items.push(propstatEntry(fileToHref(f), fileToProps(f), false));
     }
@@ -168,8 +140,8 @@ async function propfindRoot(env: Env, depth: string): Promise<Response> {
   ];
 
   if (depth !== '0') {
-    const folders = await getAllFolders(env);
-    const allFiles = await getAllFiles(env);
+    const folders = await getFoldersMap(env);
+    const allFiles = await listAllFiles(env);
 
     const rootFiles = allFiles.filter(f => f.folder === 'root');
     for (const f of rootFiles) {
@@ -244,8 +216,9 @@ async function serveDirectoryListing(env: Env, davPath: string, folders: Map<str
   const childFolders = collectChildFolders(davPath, folders, allFiles);
 
   const directFiles = davPath
-    ? allFiles.filter(f => f.folder === davPath).sort((a, b) => a.name.localeCompare(b.name))
-    : allFiles.filter(f => f.folder === 'root').sort((a, b) => a.name.localeCompare(b.name));
+    ? await listFilesInFolder(env, davPath)
+    : await listFilesInFolder(env, 'root');
+  directFiles.sort((a, b) => a.name.localeCompare(b.name));
 
   let rows = '';
   if (davPath) {
@@ -279,8 +252,8 @@ th{color:#888;font-size:13px}h1{font-size:18px;font-weight:500}</style></head>
 
 async function handleGet(request: Request, env: Env): Promise<Response> {
   const davPath = parseDavPath(request);
-  const folders = await getAllFolders(env);
-  const allFiles = await getAllFiles(env);
+  const folders = await getFoldersMap(env);
+  const allFiles = await listAllFiles(env);
   const isDir = isDirPath(davPath, folders, allFiles);
 
   if (isDir) {
@@ -291,7 +264,7 @@ async function handleGet(request: Request, env: Env): Promise<Response> {
 
   const folder = toFolder(davPath);
   const name = toFileName(davPath);
-  const file = allFiles.find(f => f.folder === folder && f.name === name) || null;
+  const file = await findFileByFolderAndName(env, folder, name);
 
   const r2Key = file ? file.key : toR2Key(folder, name);
   const object = await env.VAULT_BUCKET.get(r2Key, {
@@ -321,13 +294,9 @@ async function handleGet(request: Request, env: Env): Promise<Response> {
 
 async function handleHead(request: Request, env: Env): Promise<Response> {
   const davPath = parseDavPath(request);
-  const folders = await getAllFolders(env);
-  const allFiles = await getAllFiles(env);
 
   if (davPath) {
-    const folder = toFolder(davPath);
-    const name = toFileName(davPath);
-    const file = allFiles.find(f => f.folder === folder && f.name === name) || null;
+    const file = await findFileByDavPath(env, davPath);
     if (file) {
       return new Response(null, {
         status: 200,
@@ -340,6 +309,8 @@ async function handleHead(request: Request, env: Env): Promise<Response> {
       });
     }
 
+    const folder = toFolder(davPath);
+    const name = toFileName(davPath);
     const r2Key = toR2Key(folder, name);
     const r2Head = await env.VAULT_BUCKET.head(r2Key);
     if (r2Head) {
@@ -354,6 +325,8 @@ async function handleHead(request: Request, env: Env): Promise<Response> {
     }
   }
 
+  const folders = await getFoldersMap(env);
+  const allFiles = await listAllFiles(env);
   if (isDirPath(davPath, folders, allFiles)) {
     return new Response(null, {
       status: 200,
@@ -387,13 +360,11 @@ async function handlePut(request: Request, env: Env): Promise<Response> {
     });
     if (!r2Object) return new Response('Upload failed', { status: 500 });
 
-    const sizeDelta = r2Object.size - existingFile.size;
     existingFile.key = key;
     existingFile.size = r2Object.size;
     existingFile.type = contentType;
     existingFile.uploadedAt = new Date().toISOString();
-    await env.VAULT_KV.put(KV_PREFIX.FILE + existingFile.id, JSON.stringify(existingFile));
-    if (sizeDelta !== 0) await updateStatsCounters(env, sizeDelta, 0);
+    await putFile(env, existingFile);
 
     return new Response(null, { status: 204 });
   }
@@ -426,8 +397,7 @@ async function handlePut(request: Request, env: Env): Promise<Response> {
     downloads: 0,
   };
 
-  await env.VAULT_KV.put(KV_PREFIX.FILE + id, JSON.stringify(meta));
-  await updateStatsCounters(env, meta.size, 1);
+  await putFile(env, meta);
 
   return new Response(null, { status: 201 });
 }
@@ -437,9 +407,9 @@ async function ensureFolderChain(env: Env, folderPath: string): Promise<void> {
   let path = '';
   for (const part of parts) {
     path = path ? path + '/' + part : part;
-    const existing = await env.VAULT_KV.get('folder:' + path);
+    const existing = await getFolder(env, path);
     if (!existing) {
-      await env.VAULT_KV.put('folder:' + path, JSON.stringify({ name: path, createdAt: new Date().toISOString() }));
+      await putFolder(env, path, path);
     }
   }
 }
@@ -451,46 +421,24 @@ async function handleDelete(request: Request, env: Env): Promise<Response> {
   const file = await findFileByDavPath(env, davPath);
   if (file) {
     await env.VAULT_BUCKET.delete(file.key);
-    await env.VAULT_KV.delete(KV_PREFIX.FILE + file.id);
-    if (file.shareToken) {
-      await env.VAULT_KV.delete(KV_PREFIX.SHARE + file.shareToken);
-    }
-    await updateStatsCounters(env, -file.size, -1);
+    await deleteFile(env, file.id);
     return new Response(null, { status: 204 });
   }
 
-  const folders = await getAllFolders(env);
-  const allFiles = await getAllFiles(env);
-  const isFolder = folders.has(davPath) || allFiles.some(f => f.folder === davPath || f.folder.startsWith(davPath + '/'));
+  const folderRecord = await getFolder(env, davPath);
+  const filesUnder = await listFilesByFolderPrefix(env, davPath);
+  const isFolder = !!folderRecord || filesUnder.some((f) => f.folder === davPath || f.folder.startsWith(davPath + '/'));
 
   if (!isFolder) return new Response('Not Found', { status: 404 });
 
-  await env.VAULT_KV.delete('folder:' + davPath);
+  await dbDeleteFolder(env, davPath);
+  await deleteFoldersByPrefix(env, davPath + '/');
 
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: 'folder:' + davPath + '/', limit: 1000, cursor });
-    for (const key of result.keys) {
-      await env.VAULT_KV.delete(key.name);
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
-
-  let totalSizeRemoved = 0;
-  let deletedCount = 0;
-  for (const f of allFiles) {
+  for (const f of filesUnder) {
     if (f.folder === davPath || f.folder.startsWith(davPath + '/')) {
       await env.VAULT_BUCKET.delete(f.key);
-      await env.VAULT_KV.delete(KV_PREFIX.FILE + f.id);
-      if (f.shareToken) await env.VAULT_KV.delete(KV_PREFIX.SHARE + f.shareToken);
-      totalSizeRemoved += f.size;
-      deletedCount++;
+      await deleteFile(env, f.id);
     }
-  }
-
-  if (deletedCount > 0) {
-    await updateStatsCounters(env, -totalSizeRemoved, -deletedCount);
   }
 
   return new Response(null, { status: 204 });
@@ -506,17 +454,20 @@ async function handleMkcol(request: Request, env: Env): Promise<Response> {
   const existingFile = await findFileByDavPath(env, davPath);
   if (existingFile) return new Response('Conflict', { status: 409 });
 
-  const folders = await getAllFolders(env);
-  if (folders.has(davPath)) return new Response('Method Not Allowed', { status: 405 });
+  const existingFolder = await getFolder(env, davPath);
+  if (existingFolder) return new Response('Method Not Allowed', { status: 405 });
 
   const parentPath = davPath.includes('/') ? davPath.substring(0, davPath.lastIndexOf('/')) : '';
-  if (parentPath && !folders.has(parentPath)) {
-    const allFiles = await getAllFiles(env);
-    const parentExists = allFiles.some(f => f.folder === parentPath || f.folder.startsWith(parentPath + '/'));
-    if (!parentExists) return new Response('Conflict', { status: 409 });
+  if (parentPath) {
+    const parentFolder = await getFolder(env, parentPath);
+    if (!parentFolder) {
+      const filesUnderParent = await listFilesByFolderPrefix(env, parentPath);
+      const parentExists = filesUnderParent.some((f) => f.folder === parentPath || f.folder.startsWith(parentPath + '/'));
+      if (!parentExists) return new Response('Conflict', { status: 409 });
+    }
   }
 
-  await env.VAULT_KV.put('folder:' + davPath, JSON.stringify({ name: davPath, createdAt: new Date().toISOString() }));
+  await putFolder(env, davPath, davPath);
 
   return new Response('Created', { status: 201 });
 }
@@ -537,9 +488,7 @@ async function handleMove(request: Request, env: Env): Promise<Response> {
 
     if (destFile) {
       await env.VAULT_BUCKET.delete(destFile.key);
-      await env.VAULT_KV.delete(KV_PREFIX.FILE + destFile.id);
-      if (destFile.shareToken) await env.VAULT_KV.delete(KV_PREFIX.SHARE + destFile.shareToken);
-      await updateStatsCounters(env, -destFile.size, -1);
+      await deleteFile(env, destFile.id);
     }
 
     const newFolder = toFolder(destination);
@@ -560,7 +509,7 @@ async function handleMove(request: Request, env: Env): Promise<Response> {
     file.key = newKey;
     file.folder = newFolder;
     file.name = newName;
-    await env.VAULT_KV.put(KV_PREFIX.FILE + file.id, JSON.stringify(file));
+    await putFile(env, file);
 
     return new Response(null, { status: destFile ? 204 : 201 });
   }
@@ -585,9 +534,7 @@ async function handleCopy(request: Request, env: Env): Promise<Response> {
 
   if (destFile) {
     await env.VAULT_BUCKET.delete(destFile.key);
-    await env.VAULT_KV.delete(KV_PREFIX.FILE + destFile.id);
-    if (destFile.shareToken) await env.VAULT_KV.delete(KV_PREFIX.SHARE + destFile.shareToken);
-    await updateStatsCounters(env, -destFile.size, -1);
+    await deleteFile(env, destFile.id);
   }
 
   const newFolder = toFolder(destination);
@@ -619,8 +566,7 @@ async function handleCopy(request: Request, env: Env): Promise<Response> {
     downloads: 0,
   };
 
-  await env.VAULT_KV.put(KV_PREFIX.FILE + newId, JSON.stringify(meta));
-  await updateStatsCounters(env, meta.size, 1);
+  await putFile(env, meta);
 
   return new Response(null, { status: destFile ? 204 : 201 });
 }
