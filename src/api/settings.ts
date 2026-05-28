@@ -1,25 +1,18 @@
-import { Env, SiteSettings, DEFAULT_SETTINGS, KV_PREFIX } from '../utils/types';
-import { json, error } from '../utils/response';
-
-const SETTINGS_KEY = KV_PREFIX.SETTINGS + 'site';
+import type { Env, SiteSettings } from '../utils/types';
+import { json } from '../utils/response';
+import { getSiteSettings, putSiteSettings } from '../db/settings';
 
 export async function getSettings(env: Env): Promise<SiteSettings> {
-  const raw = await env.VAULT_KV.get(SETTINGS_KEY);
-  if (!raw) return { ...DEFAULT_SETTINGS };
-  try {
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
-  } catch {
-    return { ...DEFAULT_SETTINGS };
-  }
+  return getSiteSettings(env);
 }
 
 export async function handleGetSettings(request: Request, env: Env): Promise<Response> {
-  return json(await getSettings(env));
+  return json(await getSiteSettings(env));
 }
 
 export async function handlePutSettings(request: Request, env: Env): Promise<Response> {
   const body = await request.json<Partial<SiteSettings>>();
-  const current = await getSettings(env);
+  const current = await getSiteSettings(env);
 
   if (typeof body.guestPageEnabled === 'boolean') {
     current.guestPageEnabled = body.guestPageEnabled;
@@ -34,6 +27,6 @@ export async function handlePutSettings(request: Request, env: Env): Promise<Res
     current.siteIconUrl = body.siteIconUrl.trim().slice(0, 500);
   }
 
-  await env.VAULT_KV.put(SETTINGS_KEY, JSON.stringify(current));
+  await putSiteSettings(env, current);
   return json(current);
 }
