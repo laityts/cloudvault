@@ -1,17 +1,24 @@
-import { multipartCreate, multipartComplete, multipartUploadPart, multipartAbort, multipartAbortBeacon } from '~/api';
+import { multipartCreate, multipartComplete, multipartUploadPart, multipartAbort } from '~/api';
 import type { UploadPart } from '~/api/types';
 
 export type UploadStatus = 'pending' | 'uploading' | 'paused' | 'done' | 'error' | 'canceled';
 
 export interface UploadItem {
   id: string;
-  file: File;
+  /** 缺失意味着任务从 sessionStorage 重建后用户尚未重选文件 */
+  file?: File;
+  /** File 缺失时的占位文件名 */
+  fileName: string;
+  /** File 缺失时的占位大小 */
+  fileSize: number;
   folder: string;
   progress: number;
   status: UploadStatus;
   error?: string;
   /** 是否进入了 multipart 路径（< DIRECT_LIMIT 的小文件不能续传） */
   resumable: boolean;
+  /** 刷新后从 sessionStorage 重建、需要用户重新选择文件才能继续 */
+  needsReselect: boolean;
 }
 
 interface InternalState {
@@ -34,8 +41,21 @@ type Listener = (state: UploadItem[]) => void;
 const CHUNK_SIZE = 5 * 1024 * 1024;
 const MAX_CONCURRENT = 3;
 const DIRECT_LIMIT = 10 * 1024 * 1024;
+const STORAGE_KEY = 'cv-upload-queue';
 
 let _idCounter = 0;
+
+interface PersistedItem {
+  id: string;
+  fileName: string;
+  fileSize: number;
+  folder: string;
+  progress: number;
+  resumable: boolean;
+  uploadId?: string;
+  key?: string;
+  completedParts: UploadPart[];
+}
 
 export class UploadManager {
   private queue: UploadItem[] = [];
@@ -48,6 +68,7 @@ export class UploadManager {
   private offline = false;
 
   constructor() {
+    this.restoreFromStorage();
     if (typeof window !== 'undefined') {
       window.addEventListener('online', this.onOnline);
       window.addEventListener('offline', this.onOffline);
@@ -58,6 +79,77 @@ export class UploadManager {
     if (typeof window !== 'undefined') {
       window.removeEventListener('online', this.onOnline);
       window.removeEventListener('offline', this.onOffline);
+    }
+  }
+
+  // ── 持久化（sessionStorage） ────────────────────────────────────────
+
+  private restoreFromStorage(): void {
+    if (typeof sessionStorage === 'undefined') return;
+    let raw: string | null;
+    try {
+      raw = sessionStorage.getItem(STORAGE_KEY);
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    let persisted: PersistedItem[];
+    try {
+      persisted = JSON.parse(raw) as PersistedItem[];
+    } catch {
+      return;
+    }
+    if (!Array.isArray(persisted)) return;
+
+    for (const p of persisted) {
+      const item: UploadItem = {
+        id: p.id,
+        file: undefined,
+        fileName: p.fileName,
+        fileSize: p.fileSize,
+        folder: p.folder,
+        progress: p.progress,
+        status: 'paused',
+        resumable: p.resumable,
+        needsReselect: true,
+        error: 'reselect',
+      };
+      this.queue.push(item);
+      const state: InternalState = {
+        uploadId: p.uploadId,
+        key: p.key,
+        completedParts: p.completedParts ?? [],
+        paused: true,
+        canceled: false,
+      };
+      this.internal.set(item.id, state);
+    }
+  }
+
+  private persist(): void {
+    if (typeof sessionStorage === 'undefined') return;
+    const persisted: PersistedItem[] = [];
+    for (const item of this.queue) {
+      // 不持久化已完成 / 已取消，避免下次刷新还出现历史。
+      if (item.status === 'done' || item.status === 'canceled') continue;
+      const state = this.internal.get(item.id);
+      persisted.push({
+        id: item.id,
+        fileName: item.fileName,
+        fileSize: item.fileSize,
+        folder: item.folder,
+        progress: item.progress,
+        resumable: item.resumable,
+        uploadId: state?.uploadId,
+        key: state?.key,
+        completedParts: state?.completedParts ?? [],
+      });
+    }
+    try {
+      if (persisted.length === 0) sessionStorage.removeItem(STORAGE_KEY);
+      else sessionStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
+    } catch {
+      /* quota or privacy mode — ignore */
     }
   }
 
@@ -100,6 +192,7 @@ export class UploadManager {
   }
 
   private emit() {
+    this.persist();
     const snap = this.snapshot();
     for (const fn of this.listeners) fn(snap);
   }
@@ -119,10 +212,13 @@ export class UploadManager {
       const item: UploadItem = {
         id: `u${++_idCounter}-${file.name}`,
         file,
+        fileName: file.name,
+        fileSize: file.size,
         folder: folder || 'root',
         progress: 0,
         status: 'pending',
         resumable: file.size >= DIRECT_LIMIT,
+        needsReselect: false,
       };
       this.queue.push(item);
       this.intern(item.id);
@@ -147,6 +243,7 @@ export class UploadManager {
     const item = this.queue.find((q) => q.id === id);
     if (!item || item.status !== 'paused') return;
     if (this.offline) return;
+    if (item.needsReselect || !item.file) return;
     item.status = 'pending';
     item.error = undefined;
     const state = this.intern(item.id);
@@ -176,6 +273,7 @@ export class UploadManager {
     const item = this.queue.find((q) => q.id === id);
     if (!item || (item.status !== 'error' && item.status !== 'canceled')) return;
     if (this.offline) return;
+    if (item.needsReselect || !item.file) return;
     const state = this.intern(item.id);
     state.canceled = false;
     state.paused = false;
@@ -204,7 +302,7 @@ export class UploadManager {
   resumeAll(): void {
     if (this.offline) return;
     for (const item of this.queue) {
-      if (item.status === 'paused') {
+      if (item.status === 'paused' && !item.needsReselect && item.file) {
         item.status = 'pending';
         item.error = undefined;
         const state = this.intern(item.id);
@@ -234,7 +332,7 @@ export class UploadManager {
   retryAll(): void {
     if (this.offline) return;
     for (const item of this.queue) {
-      if (item.status === 'error' || item.status === 'canceled') {
+      if ((item.status === 'error' || item.status === 'canceled') && !item.needsReselect && item.file) {
         const state = this.intern(item.id);
         state.canceled = false;
         state.paused = false;
@@ -277,16 +375,20 @@ export class UploadManager {
   }
 
   /**
-   * 在 pagehide 等卸载场景调用。对所有有 multipart uploadId 但未 complete 的项
-   * 用 sendBeacon 发 abort。
+   * 在 pagehide 等卸载场景调用：把所有进行中 / 排队中的任务软暂停后写入
+   * sessionStorage，刷新后由 restoreFromStorage 重建为 paused + needsReselect。
+   * 不调远端 abort —— R2 multipart 保留 24 小时，用户重选文件后可手动续传。
    */
   abortPendingForUnload(): void {
+    // pause 当前 in-flight 的请求，避免页面已 unload 后还有挂单
     for (const item of this.queue) {
-      const state = this.internal.get(item.id);
-      if (!state || !state.uploadId || !state.key) continue;
-      if (item.status === 'done') continue;
-      multipartAbortBeacon({ uploadId: state.uploadId, key: state.key });
+      if (item.status === 'uploading' || item.status === 'pending') {
+        const state = this.intern(item.id);
+        state.paused = true;
+        state.abort?.abort();
+      }
     }
+    this.persist();
   }
 
   // ── 内部 ──────────────────────────────────────────────────────────────
@@ -331,18 +433,26 @@ export class UploadManager {
 
   private async upload(item: UploadItem): Promise<void> {
     const state = this.intern(item.id);
+    const file = item.file;
+    if (!file) {
+      // Defensive: needsReselect 项理论上不会进 pending，所以这里只做兜底
+      item.status = 'paused';
+      item.error = 'reselect';
+      this.emit();
+      return;
+    }
     state.abort = new AbortController();
     try {
       if (!item.resumable) {
-        await this.directUpload(item, state);
+        await this.directUpload(item, file, state);
       } else {
-        await this.multipartUpload(item, state);
+        await this.multipartUpload(item, file, state);
       }
       if (state.canceled || state.paused) return; // 已被中断
       item.status = 'done';
       item.progress = 100;
       this.emit();
-      window.dispatchEvent(new CustomEvent('upload-complete', { detail: { name: item.file.name } }));
+      window.dispatchEvent(new CustomEvent('upload-complete', { detail: { name: file.name } }));
     } catch (err) {
       if (state.canceled) {
         // 状态已在 cancel() 内置为 canceled
@@ -355,17 +465,17 @@ export class UploadManager {
       item.status = 'error';
       item.error = err instanceof Error ? err.message : String(err);
       this.emit();
-      window.dispatchEvent(new CustomEvent('upload-error', { detail: { name: item.file.name, error: item.error } }));
+      window.dispatchEvent(new CustomEvent('upload-error', { detail: { name: file.name, error: item.error } }));
     }
   }
 
-  private directUpload(item: UploadItem, state: InternalState): Promise<void> {
+  private directUpload(item: UploadItem, file: File, state: InternalState): Promise<void> {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/files/upload');
-      xhr.setRequestHeader('X-File-Name', encodeURIComponent(item.file.name));
+      xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
       xhr.setRequestHeader('X-Folder', encodeURIComponent(item.folder || 'root'));
-      xhr.setRequestHeader('Content-Type', item.file.type || 'application/octet-stream');
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
       xhr.withCredentials = true;
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
@@ -382,18 +492,18 @@ export class UploadManager {
       // AbortSignal → xhr.abort()
       const onAbort = () => xhr.abort();
       state.abort?.signal.addEventListener('abort', onAbort, { once: true });
-      xhr.send(item.file);
+      xhr.send(file);
     });
   }
 
-  private async multipartUpload(item: UploadItem, state: InternalState): Promise<void> {
+  private async multipartUpload(item: UploadItem, file: File, state: InternalState): Promise<void> {
     // 复用前次创建的 uploadId（暂停恢复路径），否则新建一次
     if (!state.uploadId || !state.key) {
       const created = await multipartCreate(
         {
-          'X-File-Name': encodeURIComponent(item.file.name),
+          'X-File-Name': encodeURIComponent(file.name),
           'X-Folder': encodeURIComponent(item.folder || 'root'),
-          'Content-Type': item.file.type || 'application/octet-stream',
+          'Content-Type': file.type || 'application/octet-stream',
         },
         state.abort?.signal,
       );
@@ -402,7 +512,7 @@ export class UploadManager {
       state.completedParts = [];
     }
 
-    const totalParts = Math.ceil(item.file.size / CHUNK_SIZE);
+    const totalParts = Math.ceil(file.size / CHUNK_SIZE);
     const doneSet = new Set(state.completedParts.map((p) => p.partNumber));
 
     for (let i = 0; i < totalParts; i++) {
@@ -412,8 +522,8 @@ export class UploadManager {
       if (state.paused || state.canceled) throw new Error('Aborted');
 
       const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, item.file.size);
-      const chunk = item.file.slice(start, end);
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunk = file.slice(start, end);
       const part = await multipartUploadPart({
         uploadId: state.uploadId,
         key: state.key,
