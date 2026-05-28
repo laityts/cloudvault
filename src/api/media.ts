@@ -54,7 +54,7 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
   if (fileMetas.length === 0) return error('No valid files found', 404);
 
   if (fileMetas.length === 1) {
-    const meta = fileMetas[0];
+    const meta = fileMetas[0]!;
     const object = await env.VAULT_BUCKET.get(meta.key);
     if (!object) return error('File not found in storage', 404);
     return streamR2Object(object, request, {
@@ -152,7 +152,7 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
 function crc32(data: Uint8Array): number {
   let crc = 0xFFFFFFFF;
   for (let i = 0; i < data.length; i++) {
-    crc ^= data[i];
+    crc ^= data[i]!;
     for (let j = 0; j < 8; j++) {
       crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
     }

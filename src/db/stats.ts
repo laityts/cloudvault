@@ -44,7 +44,7 @@ export async function computeStats(env: Env): Promise<StatsResponse> {
     env.VAULT_DB.prepare(
       'SELECT * FROM files WHERE downloads > 0 ORDER BY downloads DESC LIMIT 5',
     ),
-  ]);
+  ]) as [D1Result, D1Result, D1Result];
 
   const totals = (totalsResult.results?.[0] ?? {
     totalFiles: 0,

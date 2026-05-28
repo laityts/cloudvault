@@ -69,7 +69,7 @@ function compile(route: Route): CompiledRoute {
     methods: new Set(methods),
     any,
     segments,
-    hasWildcard: segments.length > 0 && segments[segments.length - 1].kind === 'wild',
+    hasWildcard: segments.length > 0 && segments[segments.length - 1]!.kind === 'wild',
     handler: route.handler,
     middleware: route.middleware ?? [],
   };
@@ -114,7 +114,7 @@ function matches(route: CompiledRoute, segments: string[]): boolean {
     return false;
   }
   for (let i = 0; i < route.segments.length; i++) {
-    const pat = route.segments[i];
+    const pat = route.segments[i]!;
     if (pat.kind === 'wild') return true;
     const seg = segments[i];
     if (pat.kind === 'literal') {

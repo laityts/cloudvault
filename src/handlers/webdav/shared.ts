@@ -50,8 +50,8 @@ export function collectChildFolders(davPath: string, folders: Map<string, string
   const prefix = davPath ? davPath + '/' : '';
 
   if (!davPath) {
-    for (const [name] of folders) { childSet.add(name.split('/')[0]); }
-    for (const f of allFiles) { if (f.folder !== 'root') childSet.add(f.folder.split('/')[0]); }
+    for (const [name] of folders) { childSet.add(name.split('/')[0]!); }
+    for (const f of allFiles) { if (f.folder !== 'root') childSet.add(f.folder.split('/')[0]!); }
   } else {
     for (const [name] of folders) {
       if (name.startsWith(prefix) && !name.slice(prefix.length).includes('/')) {

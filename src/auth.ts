@@ -51,7 +51,7 @@ export async function validateSession(
   const match = cookieHeader.match(/session=([^;]+)/);
   if (!match) return false;
 
-  const sessionId = match[1];
+  const sessionId = match[1]!;
   const session = await getSession(env, sessionId);
   if (!session) return false;
 
@@ -70,7 +70,7 @@ export async function validateSession(
 function getSessionId(request: Request): string | null {
   const cookieHeader = request.headers.get('Cookie') || '';
   const match = cookieHeader.match(/session=([^;]+)/);
-  return match ? match[1] : null;
+  return match ? match[1]! : null;
 }
 
 export async function handleLogin(request: Request, env: Env): Promise<Response> {

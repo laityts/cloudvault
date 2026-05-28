@@ -79,9 +79,9 @@ async function propfindRoot(env: Env, depth: string): Promise<Response> {
     }
 
     const topFolders = new Set<string>();
-    for (const [name] of folders) topFolders.add(name.split('/')[0]);
+    for (const [name] of folders) topFolders.add(name.split('/')[0]!);
     for (const f of allFiles) {
-      if (f.folder !== 'root') topFolders.add(f.folder.split('/')[0]);
+      if (f.folder !== 'root') topFolders.add(f.folder.split('/')[0]!);
     }
     for (const tf of topFolders) {
       items.push(propstatEntry(folderToHref(tf), folderToProps(tf, folders.get(tf)), true));

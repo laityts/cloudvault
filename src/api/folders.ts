@@ -134,7 +134,8 @@ export async function listFolders(_request: Request, env: Env): Promise<Response
     const parts = folder.split('/');
     let path = '';
     for (let i = 0; i < parts.length - 1; i++) {
-      path = path ? path + '/' + parts[i] : parts[i];
+      const part = parts[i]!;
+      path = path ? path + '/' + part : part;
       folderSet.add(path);
     }
   }
