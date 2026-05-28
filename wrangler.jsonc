@@ -27,6 +27,7 @@
     "enabled": true,
     "head_sampling_rate": 1
   },
+  "keep_vars": true,
   "vars": {
     "ENVIRONMENT": "production"
   }
