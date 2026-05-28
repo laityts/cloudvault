@@ -1,15 +1,10 @@
 import type { Env } from '../utils/types';
 import { json, error } from '../utils/response';
-import { getSettings } from './settings';
+import { extractPathParam } from '../utils/keys';
 import {
   getFile,
-  getFileByShareToken,
   putFile,
-  listAllFiles,
-  listFilesInFolder,
-  listFilesByFolderPrefix,
 } from '../db/files';
-import { listFoldersByPrefix } from '../db/folders';
 import {
   isFolderShareMarked,
   addFolderShare,
@@ -25,13 +20,9 @@ import {
   deleteFolderShareLinkByFolder,
 } from '../db/shares';
 
-function extractFileId(url: URL): string | null {
-  const parts = url.pathname.split('/');
-  const idx = parts.indexOf('share');
-  return idx >= 0 && parts[idx + 1] ? parts[idx + 1] : null;
-}
+// ─── Password Hashing (shared with public + download flows) ──────────
 
-async function hashSharePassword(password: string): Promise<string> {
+export async function hashSharePassword(password: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(password + ':cloudvault-share-salt');
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
@@ -47,7 +38,7 @@ export async function verifySharePassword(input: string, storedHash: string): Pr
   return crypto.subtle.timingSafeEqual(a, b);
 }
 
-// ─── Folder Sharing Helpers ───────────────────────────────────────────
+// ─── Folder Sharing Helpers (shared) ─────────────────────────────────
 
 export async function getSharedFolders(env: Env): Promise<Set<string>> {
   return dbListSharedFolders(env);
@@ -70,7 +61,16 @@ export function isFolderShared(folderPath: string, sharedFolders: Set<string>, e
   return false;
 }
 
-// ─── File Share CRUD ──────────────────────────────────────────────────
+export async function resolveFolderShareToken(
+  token: string,
+  env: Env,
+): Promise<{ folder: string; passwordHash: string | null; expiresAt: string | null } | null> {
+  const link = await getFolderShareLinkByToken(env, token);
+  if (!link) return null;
+  return { folder: link.folder, passwordHash: link.passwordHash, expiresAt: link.expiresAt };
+}
+
+// ─── File Share CRUD (admin) ──────────────────────────────────────────
 
 export async function createShare(request: Request, env: Env): Promise<Response> {
   const body = await request.json<{
@@ -86,9 +86,7 @@ export async function createShare(request: Request, env: Env): Promise<Response>
 
   const token = crypto.randomUUID();
   let passwordHash: string | null = null;
-  if (body.password) {
-    passwordHash = await hashSharePassword(body.password);
-  }
+  if (body.password) passwordHash = await hashSharePassword(body.password);
 
   let expiresAt: string | null = null;
   if (body.expiresInDays && body.expiresInDays > 0) {
@@ -110,8 +108,7 @@ export async function createShare(request: Request, env: Env): Promise<Response>
 }
 
 export async function revokeShare(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const fileId = extractFileId(url);
+  const fileId = extractPathParam(new URL(request.url), 'share');
   if (!fileId) return error('File ID required', 400);
 
   const meta = await getFile(env, fileId);
@@ -127,8 +124,7 @@ export async function revokeShare(request: Request, env: Env): Promise<Response>
 }
 
 export async function getShareInfo(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const fileId = extractFileId(url);
+  const fileId = extractPathParam(new URL(request.url), 'share');
   if (!fileId) return error('File ID required', 400);
 
   const meta = await getFile(env, fileId);
@@ -143,7 +139,7 @@ export async function getShareInfo(request: Request, env: Env): Promise<Response
   });
 }
 
-// ─── Folder Share Toggle ──────────────────────────────────────────────
+// ─── Folder Share Toggle (admin) ──────────────────────────────────────
 
 export async function shareFolderToggle(request: Request, env: Env): Promise<Response> {
   const body = await request.json<{ folder: string }>();
@@ -178,7 +174,7 @@ export async function toggleFolderExclude(request: Request, env: Env): Promise<R
   return json({ excluded: true, folder });
 }
 
-// ─── Folder Share Link CRUD ────────────────────────────────────────────
+// ─── Folder Share Link CRUD (admin) ────────────────────────────────────
 
 export async function createFolderShareLink(request: Request, env: Env): Promise<Response> {
   const body = await request.json<{
@@ -192,9 +188,7 @@ export async function createFolderShareLink(request: Request, env: Env): Promise
 
   const token = crypto.randomUUID();
   let passwordHash: string | null = null;
-  if (body.password) {
-    passwordHash = await hashSharePassword(body.password);
-  }
+  if (body.password) passwordHash = await hashSharePassword(body.password);
 
   let expiresAt: string | null = null;
   if (body.expiresInDays && body.expiresInDays > 0) {
@@ -243,201 +237,4 @@ export async function getFolderShareLinkInfo(request: Request, env: Env): Promis
     hasPassword: !!link.passwordHash,
     expiresAt: link.expiresAt,
   });
-}
-
-export async function resolveFolderShareToken(token: string, env: Env): Promise<{ folder: string; passwordHash: string | null; expiresAt: string | null } | null> {
-  const link = await getFolderShareLinkByToken(env, token);
-  if (!link) return null;
-  return { folder: link.folder, passwordHash: link.passwordHash, expiresAt: link.expiresAt };
-}
-
-export async function browseFolderShareLink(folder: string, subpath: string, env: Env): Promise<{ files: Array<{ id: string; name: string; size: number; type: string; folder: string; uploadedAt: string }>; subfolders: string[] }> {
-  const browsePath = subpath ? folder + '/' + subpath : folder;
-  const prefix = browsePath + '/';
-
-  const filesInFolder = await listFilesInFolder(env, browsePath);
-  const folderFiles = filesInFolder
-    .map(f => ({
-      id: f.id, name: f.name, size: f.size, type: f.type,
-      folder: f.folder, uploadedAt: f.uploadedAt,
-    }))
-    .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-
-  const subfolderSet = new Set<string>();
-
-  const descendantFiles = await listFilesByFolderPrefix(env, browsePath);
-  for (const f of descendantFiles) {
-    if (f.folder.startsWith(prefix)) {
-      const rest = f.folder.slice(prefix.length);
-      const slashIdx = rest.indexOf('/');
-      const childName = slashIdx >= 0 ? rest.substring(0, slashIdx) : rest;
-      if (childName) subfolderSet.add(prefix + childName);
-    }
-  }
-
-  const descendantFolders = await listFoldersByPrefix(env, browsePath);
-  for (const fr of descendantFolders) {
-    if (fr.path.startsWith(prefix)) {
-      const rest = fr.path.slice(prefix.length);
-      const slashIdx = rest.indexOf('/');
-      const childName = slashIdx >= 0 ? rest.substring(0, slashIdx) : rest;
-      if (childName) subfolderSet.add(prefix + childName);
-    }
-  }
-
-  return { files: folderFiles, subfolders: Array.from(subfolderSet).sort() };
-}
-
-// ─── Public Shared Listing (with folder inheritance) ──────────────────
-
-export async function listPublicShared(request: Request, env: Env): Promise<Response> {
-  const settings = await getSettings(env);
-  const sharedFolders = await getSharedFolders(env);
-  const excludedFolders = await getExcludedFolders(env);
-  const allFiles = await listAllFiles(env);
-
-  const visibleFolders = Array.from(sharedFolders).filter(sf => !excludedFolders.has(sf));
-
-  const files: Array<{
-    id: string; name: string; size: number; type: string;
-    token: string | null; folder: string; uploadedAt: string;
-  }> = [];
-
-  for (const meta of allFiles) {
-    const hasValidShareLink = !!meta.shareToken && !meta.sharePassword &&
-      (!meta.shareExpiresAt || new Date(meta.shareExpiresAt) >= new Date());
-    const inSharedFolder = isFolderShared(meta.folder, sharedFolders, excludedFolders);
-
-    if (hasValidShareLink && !inSharedFolder) {
-      files.push({
-        id: meta.id, name: meta.name, size: meta.size, type: meta.type,
-        token: meta.shareToken, folder: meta.folder, uploadedAt: meta.uploadedAt,
-      });
-    }
-  }
-
-  files.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-  return json({
-    files,
-    sharedFolders: visibleFolders.sort(),
-    settings: { showLoginButton: settings.showLoginButton, siteName: settings.siteName, siteIconUrl: settings.siteIconUrl },
-  });
-}
-
-// ─── Public Folder Browse ─────────────────────────────────────────────
-
-export async function browsePublicFolder(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const path = url.searchParams.get('path') || '';
-  const sharedFolders = await getSharedFolders(env);
-  const excludedFolders = await getExcludedFolders(env);
-
-  if (!path) {
-    const visibleFolders = Array.from(sharedFolders).filter(sf => !excludedFolders.has(sf));
-    return json({ files: [], subfolders: visibleFolders.sort(), currentFolder: '' });
-  }
-
-  const isSharedOrChild = isFolderShared(path, sharedFolders, excludedFolders);
-  const isAncestorOfShared = !isSharedOrChild && Array.from(sharedFolders).some(
-    sf => sf.startsWith(path + '/') && !excludedFolders.has(sf)
-  );
-
-  if (!isSharedOrChild && !isAncestorOfShared) {
-    return error('Folder not shared', 403);
-  }
-
-  const prefix = path + '/';
-
-  let folderFiles: Array<{
-    id: string; name: string; size: number; type: string;
-    token: string | null; folder: string; uploadedAt: string;
-  }> = [];
-
-  if (isSharedOrChild) {
-    const filesInFolder = await listFilesInFolder(env, path);
-    folderFiles = filesInFolder
-      .map(f => ({
-        id: f.id, name: f.name, size: f.size, type: f.type,
-        token: f.shareToken || null, folder: f.folder, uploadedAt: f.uploadedAt,
-      }))
-      .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-  }
-
-  const subfolderSet = new Set<string>();
-
-  if (isAncestorOfShared) {
-    for (const sf of sharedFolders) {
-      if (sf.startsWith(prefix)) {
-        const rest = sf.slice(prefix.length);
-        const slashIdx = rest.indexOf('/');
-        const childName = slashIdx >= 0 ? rest.substring(0, slashIdx) : rest;
-        if (childName) subfolderSet.add(prefix + childName);
-      }
-    }
-  } else {
-    const descendantFiles = await listFilesByFolderPrefix(env, path);
-    for (const f of descendantFiles) {
-      if (f.folder.startsWith(prefix)) {
-        const rest = f.folder.slice(prefix.length);
-        const slashIdx = rest.indexOf('/');
-        const childName = slashIdx >= 0 ? rest.substring(0, slashIdx) : rest;
-        if (childName) subfolderSet.add(prefix + childName);
-      }
-    }
-    const descendantFolders = await listFoldersByPrefix(env, path);
-    for (const fr of descendantFolders) {
-      if (fr.path.startsWith(prefix)) {
-        const rest = fr.path.slice(prefix.length);
-        const slashIdx = rest.indexOf('/');
-        const childName = slashIdx >= 0 ? rest.substring(0, slashIdx) : rest;
-        if (childName) subfolderSet.add(prefix + childName);
-      }
-    }
-  }
-
-  for (const ex of excludedFolders) {
-    subfolderSet.delete(ex);
-    for (const sf of subfolderSet) {
-      if (sf.startsWith(ex + '/')) subfolderSet.delete(sf);
-    }
-  }
-
-  return json({ files: folderFiles, subfolders: Array.from(subfolderSet).sort(), currentFolder: path });
-}
-
-// ─── Public File Download (folder-shared files) ──────────────────────
-
-export async function publicDownload(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const parts = url.pathname.split('/');
-  const fileId = parts[parts.length - 1];
-  if (!fileId) return error('File ID required', 400);
-
-  const meta = await getFile(env, fileId);
-  if (!meta) return error('File not found', 404);
-
-  const hasPublicLink = !!meta.shareToken && !meta.sharePassword &&
-    (!meta.shareExpiresAt || new Date(meta.shareExpiresAt) >= new Date());
-  const sharedFolders = await getSharedFolders(env);
-  const excludedFolders = await getExcludedFolders(env);
-  const inSharedFolder = isFolderShared(meta.folder, sharedFolders, excludedFolders);
-
-  if (!hasPublicLink && !inSharedFolder) {
-    return error('File not publicly accessible', 403);
-  }
-
-  const object = await env.VAULT_BUCKET.get(meta.key);
-  if (!object) return error('File not found in storage', 404);
-
-  meta.downloads++;
-  await putFile(env, meta);
-
-  const headers = new Headers();
-  object.writeHttpMetadata(headers);
-  headers.set('etag', object.httpEtag);
-  headers.set('Cache-Control', 'public, max-age=14400, s-maxage=86400');
-  headers.set('Content-Disposition', 'attachment; filename="' + encodeURIComponent(meta.name) + '"');
-  headers.set('Content-Length', String(object.size));
-
-  return new Response(object.body, { headers });
 }

@@ -6,6 +6,7 @@ import * as files from './api/files';
 import * as folders from './api/folders';
 import * as media from './api/media';
 import * as share from './api/share';
+import * as pub from './api/public';
 import * as stats from './api/stats';
 import * as settings from './api/settings';
 import * as download from './handlers/download';
@@ -23,22 +24,22 @@ const router = createRouter([
   { method: 'GET', pattern: '/login', handler: handleLoginPage },
 
   // ── Public API (no auth) ──────────────────────────────────────────
-  { method: 'GET', pattern: '/api/public/shared', handler: share.listPublicShared },
-  { method: 'GET', pattern: '/api/public/folder', handler: share.browsePublicFolder },
+  { method: 'GET', pattern: '/api/public/shared', handler: pub.listPublicShared },
+  { method: 'GET', pattern: '/api/public/folder', handler: pub.browsePublicFolder },
   {
     method: 'GET',
     pattern: '/api/public/download/*',
     handler: async (req, env, ctx) =>
-      (await serveWithEdgeCache(req, ctx, () => share.publicDownload(req, env)))!,
+      (await serveWithEdgeCache(req, ctx, () => pub.publicDownload(req, env)))!,
   },
 
   // ── Share routes (token-based, no session) ────────────────────────
-  { method: 'GET', pattern: '/s/:token', handler: download.handleSharePage },
-  { method: 'GET', pattern: '/s/:token/download', handler: download.handleShareDownload },
-  { method: 'GET', pattern: '/s/:token/preview', handler: download.handlePreview },
-  { method: 'GET', pattern: '/s/:token/folder-download', handler: download.handleFolderShareDownload },
-  { method: 'GET', pattern: '/s/:token/folder-preview', handler: download.handleFolderSharePreview },
-  { method: 'POST', pattern: '/s/:token/verify', handler: download.handleSharePassword },
+  { method: 'GET', pattern: '/s/:token', handler: pub.handleSharePage },
+  { method: 'GET', pattern: '/s/:token/download', handler: pub.handleShareDownload },
+  { method: 'GET', pattern: '/s/:token/preview', handler: pub.handlePreview },
+  { method: 'GET', pattern: '/s/:token/folder-download', handler: pub.handleFolderShareDownload },
+  { method: 'GET', pattern: '/s/:token/folder-preview', handler: pub.handleFolderSharePreview },
+  { method: 'POST', pattern: '/s/:token/verify', handler: pub.handleSharePassword },
 
   // ── Admin page (session auth) ─────────────────────────────────────
   { method: 'GET', pattern: '/admin', middleware: [authMiddleware], handler: handleAdminPage },
