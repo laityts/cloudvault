@@ -1,42 +1,39 @@
-import { Env, FileMeta, KV_PREFIX } from '../utils/types';
+import type { Env, FileMeta } from '../utils/types';
 import { json, error, getMimeType } from '../utils/response';
 import { getSharedFolders, getExcludedFolders, isFolderShared } from './share';
+import {
+  getFile,
+  putFile,
+  deleteFile,
+  listFilesInFolder,
+  listFilesByFolderPrefix,
+  searchFiles,
+  listAllFiles,
+} from '../db/files';
+import {
+  getFolder,
+  putFolder,
+  deleteFolder as dbDeleteFolder,
+  deleteFoldersByPrefix,
+  listAllFolders,
+  listFoldersByPrefix,
+  renameFolderRecord,
+} from '../db/folders';
+import {
+  isFolderShareMarked,
+  addFolderShare,
+  removeFolderShare,
+  isFolderExcluded,
+  addFolderExclude,
+  removeFolderExclude,
+  deleteFolderShareLinkByFolder,
+  deleteFolderShareLinksByFolderPrefix,
+} from '../db/shares';
 
 function extractId(url: URL): string | null {
   const parts = url.pathname.split('/');
   const idx = parts.indexOf('files');
   return idx >= 0 && parts[idx + 1] ? parts[idx + 1] : null;
-}
-
-async function getAllFiles(env: Env): Promise<FileMeta[]> {
-  const files: FileMeta[] = [];
-  let cursor: string | undefined;
-
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: KV_PREFIX.FILE, limit: 1000, cursor });
-    for (const key of result.keys) {
-      const raw = await env.VAULT_KV.get(key.name);
-      if (raw) {
-        try { files.push(JSON.parse(raw)); } catch { /* skip corrupted entries */ }
-      }
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
-  return files;
-}
-
-async function updateStatsCounters(env: Env, sizeDelta: number, countDelta: number): Promise<void> {
-  const [rawSize, rawCount] = await Promise.all([
-    env.VAULT_KV.get(KV_PREFIX.STATS + 'totalSize'),
-    env.VAULT_KV.get(KV_PREFIX.STATS + 'totalFiles'),
-  ]);
-  const newSize = Math.max(0, (parseInt(rawSize || '0', 10) + sizeDelta));
-  const newCount = Math.max(0, (parseInt(rawCount || '0', 10) + countDelta));
-  await Promise.all([
-    env.VAULT_KV.put(KV_PREFIX.STATS + 'totalSize', String(newSize)),
-    env.VAULT_KV.put(KV_PREFIX.STATS + 'totalFiles', String(newCount)),
-  ]);
 }
 
 export async function upload(request: Request, env: Env): Promise<Response> {
@@ -60,7 +57,6 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
   const fileName = decodeURIComponent(request.headers.get('X-File-Name') || 'untitled');
   const folder = decodeURIComponent(request.headers.get('X-Folder') || 'root');
   const contentType = request.headers.get('Content-Type') || getMimeType(fileName);
-  const contentLength = request.headers.get('Content-Length');
 
   const id = crypto.randomUUID();
   const key = folder === 'root' ? fileName : folder + '/' + fileName;
@@ -91,8 +87,7 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
     downloads: 0,
   };
 
-  await env.VAULT_KV.put(KV_PREFIX.FILE + id, JSON.stringify(meta));
-  await updateStatsCounters(env, meta.size, 1);
+  await putFile(env, meta);
 
   return json(meta, 201);
 }
@@ -154,8 +149,7 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
     downloads: 0,
   };
 
-  await env.VAULT_KV.put(KV_PREFIX.FILE + id, JSON.stringify(meta));
-  await updateStatsCounters(env, meta.size, 1);
+  await putFile(env, meta);
 
   return json(meta, 201);
 }
@@ -163,20 +157,19 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
 export async function list(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const folderFilter = url.searchParams.get('folder');
-  const searchFilter = url.searchParams.get('search')?.toLowerCase();
+  const searchFilter = url.searchParams.get('search');
 
-  let files = await getAllFiles(env);
-
-  if (folderFilter) {
-    files = files.filter(f => f.folder === folderFilter);
-  } else if (!searchFilter) {
-    files = files.filter(f => f.folder === 'root');
-  }
+  let files: FileMeta[];
   if (searchFilter) {
-    files = files.filter(f => f.name.toLowerCase().includes(searchFilter));
+    files = await searchFiles(env, searchFilter);
+    if (folderFilter) {
+      files = files.filter((f) => f.folder === folderFilter);
+    }
+  } else if (folderFilter) {
+    files = await listFilesInFolder(env, folderFilter);
+  } else {
+    files = await listFilesInFolder(env, 'root');
   }
-
-  files.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
 
   return json({ files, cursor: null, totalFiles: files.length });
 }
@@ -186,10 +179,10 @@ export async function get(request: Request, env: Env): Promise<Response> {
   const id = extractId(url);
   if (!id) return error('File ID required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-  if (!raw) return error('File not found', 404);
+  const meta = await getFile(env, id);
+  if (!meta) return error('File not found', 404);
 
-  return json(JSON.parse(raw));
+  return json(meta);
 }
 
 export async function download(request: Request, env: Env): Promise<Response> {
@@ -198,9 +191,8 @@ export async function download(request: Request, env: Env): Promise<Response> {
   const id = parts[parts.indexOf('files') + 1];
   if (!id) return error('File ID required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-  if (!raw) return error('File not found', 404);
-  const meta: FileMeta = JSON.parse(raw);
+  const meta = await getFile(env, id);
+  if (!meta) return error('File not found', 404);
 
   const object = await env.VAULT_BUCKET.get(meta.key);
   if (!object) return error('File not found in storage', 404);
@@ -230,22 +222,13 @@ export async function deleteFiles(request: Request, env: Env): Promise<Response>
 
   if (!ids || ids.length === 0) return error('No file IDs provided', 400);
 
-  let totalSizeRemoved = 0;
   for (const id of ids) {
-    const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-    if (!raw) continue;
+    const meta = await getFile(env, id);
+    if (!meta) continue;
 
-    const meta: FileMeta = JSON.parse(raw);
     await env.VAULT_BUCKET.delete(meta.key);
-    await env.VAULT_KV.delete(KV_PREFIX.FILE + id);
-
-    if (meta.shareToken) {
-      await env.VAULT_KV.delete(KV_PREFIX.SHARE + meta.shareToken);
-    }
-    totalSizeRemoved += meta.size;
+    await deleteFile(env, id);
   }
-
-  await updateStatsCounters(env, -totalSizeRemoved, -ids.length);
 
   return json({ deleted: ids.length });
 }
@@ -255,15 +238,14 @@ export async function rename(request: Request, env: Env): Promise<Response> {
   const id = extractId(url);
   if (!id) return error('File ID required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-  if (!raw) return error('File not found', 404);
+  const meta = await getFile(env, id);
+  if (!meta) return error('File not found', 404);
 
   const body = await request.json<{ name: string }>();
   if (!body.name?.trim()) return error('Name required', 400);
 
-  const meta: FileMeta = JSON.parse(raw);
   meta.name = body.name.trim();
-  await env.VAULT_KV.put(KV_PREFIX.FILE + id, JSON.stringify(meta));
+  await putFile(env, meta);
 
   return json(meta);
 }
@@ -273,7 +255,7 @@ export async function createFolder(request: Request, env: Env): Promise<Response
   if (!body.name?.trim()) return error('Folder name required', 400);
 
   const folderName = body.parent === 'root' ? body.name.trim() : body.parent + '/' + body.name.trim();
-  await env.VAULT_KV.put('folder:' + folderName, JSON.stringify({ name: folderName, createdAt: new Date().toISOString() }));
+  await putFolder(env, folderName, folderName);
 
   return json({ folder: folderName }, 201);
 }
@@ -283,66 +265,21 @@ export async function deleteFolder(request: Request, env: Env): Promise<Response
   if (!body.folder?.trim()) return error('Folder name required', 400);
   const folder = body.folder.trim();
 
-  // Delete the folder KV entry
-  await env.VAULT_KV.delete('folder:' + folder);
+  // Delete folder records (this folder + all descendants)
+  await dbDeleteFolder(env, folder);
+  const deletedSubfolders = await deleteFoldersByPrefix(env, folder + '/');  await removeFolderShare(env, folder);
+  await removeFolderExclude(env, folder);
+  await deleteFolderShareLinkByFolder(env, folder);
+  await deleteFolderShareLinksByFolderPrefix(env, folder + '/');
 
-  // Delete any share keys for this folder
-  await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE + folder);
-  await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_EXCLUDE + folder);
-
-  // Clean up folder share link for this folder
-  const metaRaw = await env.VAULT_KV.get(KV_PREFIX.FOLDER_SHARE_LINK + 'meta:' + folder);
-  if (metaRaw) {
-    try {
-      const meta = JSON.parse(metaRaw);
-      await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_LINK + meta.token);
-    } catch { /* ignore parse errors */ }
-    await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_LINK + 'meta:' + folder);
-  }
-
-  // Delete sub-folder KV entries and their share links
-  let cursor: string | undefined;
-  let deletedSubfolders = 0;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: 'folder:' + folder + '/', limit: 1000, cursor });
-    for (const key of result.keys) {
-      await env.VAULT_KV.delete(key.name);
-      const subName = key.name.replace('folder:', '');
-      await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE + subName);
-      await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_EXCLUDE + subName);
-      // Clean up sub-folder share link
-      const subMetaRaw = await env.VAULT_KV.get(KV_PREFIX.FOLDER_SHARE_LINK + 'meta:' + subName);
-      if (subMetaRaw) {
-        try {
-          const subMeta = JSON.parse(subMetaRaw);
-          await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_LINK + subMeta.token);
-        } catch { /* ignore */ }
-        await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_LINK + 'meta:' + subName);
-      }
-      deletedSubfolders++;
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
-
-  // Delete all contained files (R2 objects + KV entries + share tokens)
-  const allFiles = await getAllFiles(env);
+  const filesToDelete = await listFilesByFolderPrefix(env, folder);
   let deletedFiles = 0;
-  let totalSizeRemoved = 0;
-  for (const file of allFiles) {
+  for (const file of filesToDelete) {
     if (file.folder === folder || file.folder.startsWith(folder + '/')) {
       await env.VAULT_BUCKET.delete(file.key);
-      await env.VAULT_KV.delete(KV_PREFIX.FILE + file.id);
-      if (file.shareToken) {
-        await env.VAULT_KV.delete(KV_PREFIX.SHARE + file.shareToken);
-      }
-      totalSizeRemoved += file.size;
+      await deleteFile(env, file.id);
       deletedFiles++;
     }
-  }
-
-  if (deletedFiles > 0) {
-    await updateStatsCounters(env, -totalSizeRemoved, -deletedFiles);
   }
 
   return json({ deleted: folder, deletedFiles, deletedSubfolders });
@@ -355,89 +292,69 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
   const newName = body.newName.trim();
   if (oldName === newName) return json({ folder: newName });
 
-  // Create new folder entry
-  await env.VAULT_KV.put('folder:' + newName, JSON.stringify({ name: newName, createdAt: new Date().toISOString() }));
-  await env.VAULT_KV.delete('folder:' + oldName);
-
-  // Transfer share status
-  const shareVal = await env.VAULT_KV.get(KV_PREFIX.FOLDER_SHARE + oldName);
-  if (shareVal) {
-    await env.VAULT_KV.put(KV_PREFIX.FOLDER_SHARE + newName, shareVal);
-    await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE + oldName);
-  }
-  const excludeVal = await env.VAULT_KV.get(KV_PREFIX.FOLDER_SHARE_EXCLUDE + oldName);
-  if (excludeVal) {
-    await env.VAULT_KV.put(KV_PREFIX.FOLDER_SHARE_EXCLUDE + newName, excludeVal);
-    await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_EXCLUDE + oldName);
+  // Rename the folder record itself
+  const existing = await getFolder(env, oldName);
+  if (existing) {
+    await renameFolderRecord(env, oldName, newName, newName);
+  } else {
+    await putFolder(env, newName, newName);
   }
 
-  // Rename sub-folders
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: 'folder:' + oldName + '/', limit: 1000, cursor });
-    for (const key of result.keys) {
-      const subOld = key.name.replace('folder:', '');
-      const subNew = newName + subOld.slice(oldName.length);
-      const val = await env.VAULT_KV.get(key.name);
-      if (val) await env.VAULT_KV.put('folder:' + subNew, val);
-      await env.VAULT_KV.delete(key.name);
-      const subShare = await env.VAULT_KV.get(KV_PREFIX.FOLDER_SHARE + subOld);
-      if (subShare) {
-        await env.VAULT_KV.put(KV_PREFIX.FOLDER_SHARE + subNew, subShare);
-        await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE + subOld);
-      }
-      const subExcl = await env.VAULT_KV.get(KV_PREFIX.FOLDER_SHARE_EXCLUDE + subOld);
-      if (subExcl) {
-        await env.VAULT_KV.put(KV_PREFIX.FOLDER_SHARE_EXCLUDE + subNew, subExcl);
-        await env.VAULT_KV.delete(KV_PREFIX.FOLDER_SHARE_EXCLUDE + subOld);
-      }
+  // Rename sub-folder records
+  const subFolders = await listFoldersByPrefix(env, oldName + '/');
+  for (const sf of subFolders) {
+    if (sf.path === oldName) continue;
+    const newPath = newName + sf.path.slice(oldName.length);
+    await renameFolderRecord(env, sf.path, newPath, newPath);
+  }
+
+  // Transfer share marks for the renamed folder and its descendants
+  if (await isFolderShareMarked(env, oldName)) {
+    await removeFolderShare(env, oldName);
+    await addFolderShare(env, newName);
+  }
+  if (await isFolderExcluded(env, oldName)) {
+    await removeFolderExclude(env, oldName);
+    await addFolderExclude(env, newName);
+  }
+
+  // Move files (R2 + DB) for both the folder and its descendants
+  const allMovingFiles = await listFilesByFolderPrefix(env, oldName);
+  for (const file of allMovingFiles) {
+    if (file.folder !== oldName && !file.folder.startsWith(oldName + '/')) continue;
+    const newFolder = newName + file.folder.slice(oldName.length);
+    const newKey = newFolder === 'root' ? file.name : newFolder + '/' + file.name;
+    const obj = await env.VAULT_BUCKET.get(file.key);
+    if (obj) {
+      await env.VAULT_BUCKET.put(newKey, obj.body, {
+        httpMetadata: obj.httpMetadata,
+        customMetadata: obj.customMetadata,
+      });
+      await env.VAULT_BUCKET.delete(file.key);
     }
-    if (result.list_complete) break;
-    cursor = result.cursor;
-  }
-
-  // Update file paths
-  const allFiles = await getAllFiles(env);
-  for (const file of allFiles) {
-    if (file.folder === oldName || file.folder.startsWith(oldName + '/')) {
-      const newFolder = newName + file.folder.slice(oldName.length);
-      const newKey = newFolder === 'root' ? file.name : newFolder + '/' + file.name;
-      const obj = await env.VAULT_BUCKET.get(file.key);
-      if (obj) {
-        await env.VAULT_BUCKET.put(newKey, obj.body, {
-          httpMetadata: obj.httpMetadata,
-          customMetadata: obj.customMetadata,
-        });
-        await env.VAULT_BUCKET.delete(file.key);
-      }
-      file.key = newKey;
-      file.folder = newFolder;
-      await env.VAULT_KV.put(KV_PREFIX.FILE + file.id, JSON.stringify(file));
-    }
+    file.key = newKey;
+    file.folder = newFolder;
+    await putFile(env, file);
   }
 
   return json({ folder: newName });
 }
 
 export async function listFolders(_request: Request, env: Env): Promise<Response> {
-  const files = await getAllFiles(env);
   const folderSet = new Set<string>();
 
-  for (const file of files) {
+  // From files (catches folders that have files but no folder record)
+  const allFiles = await listAllFiles(env);
+  for (const file of allFiles) {
     if (file.folder && file.folder !== 'root') {
       folderSet.add(file.folder);
     }
   }
 
-  let cursor: string | undefined;
-  for (;;) {
-    const result = await env.VAULT_KV.list({ prefix: 'folder:', limit: 1000, cursor });
-    for (const key of result.keys) {
-      const name = key.name.replace('folder:', '');
-      if (name) folderSet.add(name);
-    }
-    if (result.list_complete) break;
-    cursor = result.cursor;
+  // From folder records (empty folders)
+  const folderRecords = await listAllFolders(env);
+  for (const fr of folderRecords) {
+    if (fr.path) folderSet.add(fr.path);
   }
 
   // Ensure all intermediate parent folders are included in the set
@@ -452,7 +369,7 @@ export async function listFolders(_request: Request, env: Env): Promise<Response
 
   const sharedFolders = await getSharedFolders(env);
   const excludedFolders = await getExcludedFolders(env);
-  const folderList = Array.from(folderSet).sort().map(name => ({
+  const folderList = Array.from(folderSet).sort().map((name) => ({
     name,
     shared: isFolderShared(name, sharedFolders, excludedFolders),
     directlyShared: sharedFolders.has(name),
@@ -471,10 +388,8 @@ export async function moveFiles(request: Request, env: Env): Promise<Response> {
   let moved = 0;
 
   for (const id of body.ids) {
-    const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-    if (!raw) continue;
-
-    const meta: FileMeta = JSON.parse(raw);
+    const meta = await getFile(env, id);
+    if (!meta) continue;
     if (meta.folder === targetFolder) continue;
 
     const newKey = targetFolder === 'root' ? meta.name : targetFolder + '/' + meta.name;
@@ -490,7 +405,7 @@ export async function moveFiles(request: Request, env: Env): Promise<Response> {
 
     meta.key = newKey;
     meta.folder = targetFolder;
-    await env.VAULT_KV.put(KV_PREFIX.FILE + id, JSON.stringify(meta));
+    await putFile(env, meta);
     moved++;
   }
 
@@ -503,9 +418,8 @@ export async function thumbnail(request: Request, env: Env): Promise<Response> {
   const id = parts[parts.indexOf('files') + 1];
   if (!id) return error('File ID required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-  if (!raw) return error('File not found', 404);
-  const meta: FileMeta = JSON.parse(raw);
+  const meta = await getFile(env, id);
+  if (!meta) return error('File not found', 404);
 
   if (!meta.type.startsWith('image/')) return error('Not an image', 400);
 
@@ -527,9 +441,8 @@ export async function preview(request: Request, env: Env): Promise<Response> {
   const id = parts[parts.indexOf('files') + 1];
   if (!id) return error('File ID required', 400);
 
-  const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-  if (!raw) return error('File not found', 404);
-  const meta: FileMeta = JSON.parse(raw);
+  const meta = await getFile(env, id);
+  if (!meta) return error('File not found', 404);
 
   const rangeHeader = request.headers.get('Range');
 
@@ -575,10 +488,8 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
   // Collect file metadata
   const fileMetas: FileMeta[] = [];
   for (const id of body.ids) {
-    const raw = await env.VAULT_KV.get(KV_PREFIX.FILE + id);
-    if (raw) {
-      try { fileMetas.push(JSON.parse(raw)); } catch { /* skip */ }
-    }
+    const meta = await getFile(env, id);
+    if (meta) fileMetas.push(meta);
   }
 
   if (fileMetas.length === 0) return error('No valid files found', 404);
