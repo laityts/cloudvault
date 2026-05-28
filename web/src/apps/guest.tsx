@@ -156,7 +156,7 @@ function GuestApp() {
             >
               <Show when={(data()?.folders?.length ?? 0) + (data()?.files?.length ?? 0) > 0}>
                 <div class="mb-4 flex items-center gap-3">
-                  <div class="relative w-44 sm:w-auto sm:flex-1 sm:max-w-xs">
+                  <div class="relative flex-1 max-w-xs">
                     <Input
                       type="search"
                       placeholder="搜索文件…"
@@ -165,12 +165,17 @@ function GuestApp() {
                       onInput={(e) => setSearch(e.currentTarget.value)}
                     />
                   </div>
-                  <span class="text-[12px] text-fg-muted hidden sm:inline tabular">
-                    {filteredFiles().length} 个文件
-                    <Show when={filteredFolders().length > 0}>
-                      <span class="mx-2 text-fg-subtle">·</span>
-                      {filteredFolders().length} 个文件夹
-                    </Show>
+                  <span class="shrink-0 text-[12px] text-fg-muted tabular">
+                    <span class="sm:hidden">
+                      {filteredFiles().length + filteredFolders().length} 项
+                    </span>
+                    <span class="hidden sm:inline">
+                      {filteredFiles().length} 个文件
+                      <Show when={filteredFolders().length > 0}>
+                        <span class="mx-2 text-fg-subtle">·</span>
+                        {filteredFolders().length} 个文件夹
+                      </Show>
+                    </span>
                   </span>
                 </div>
 
