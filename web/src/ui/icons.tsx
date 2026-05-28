@@ -105,7 +105,14 @@ export const IconApp = (p: Props) => <Icon {...p} d={['M5 4h14a1 1 0 011 1v14a1 
 export const IconFont = (p: Props) => <Icon {...p} d={['M5 20l5-15h4l5 15', 'M7.5 15h9']} />;
 
 export const IconUpload = (p: Props) => (
-  <Icon {...p} d={['M12 4v12', 'M7 9l5-5 5 5', 'M5 20h14']} />
+  <Icon
+    {...p}
+    d={[
+      'M17 18.5a4 4 0 0 0 .5-7.97 6 6 0 0 0-11.71-1.3A4.5 4.5 0 0 0 7 18.5',
+      'M12 12v9',
+      'M8.5 15.5L12 12l3.5 3.5',
+    ]}
+  />
 );
 export const IconDownload = (p: Props) => (
   <Icon {...p} d={['M12 4v12', 'M7 11l5 5 5-5', 'M5 20h14']} />
