@@ -1,13 +1,90 @@
-import { Env } from './utils/types';
-import { error, redirect, corsPreflightResponse, fetchAssetHtml, injectBranding } from './utils/response';
-import { handleLogin, handleLogout, authMiddleware, validateSession } from './auth';
-import { getSettings } from './api/settings';
+import type { Env } from './utils/types';
+import { error, corsPreflightResponse } from './utils/response';
+import { createRouter } from './router';
+import { handleLogin, handleLogout, authMiddleware, validateSession, webdavBasicAuth } from './auth';
 import * as files from './api/files';
 import * as share from './api/share';
 import * as stats from './api/stats';
 import * as settings from './api/settings';
 import * as download from './handlers/download';
+import { handleRootPage, handleLoginPage, handleAdminPage, serve404Page } from './handlers/pages';
 import { handleWebDav } from './handlers/webdav';
+import { serveWithEdgeCache, isStaticAsset } from './utils/cache';
+
+const router = createRouter([
+  // ── Auth ──────────────────────────────────────────────────────────
+  { method: 'POST', pattern: '/auth/login', handler: handleLogin },
+  { method: '*', pattern: '/auth/logout', handler: handleLogout },
+
+  // ── Public pages ──────────────────────────────────────────────────
+  { method: 'GET', pattern: '/', handler: handleRootPage },
+  { method: 'GET', pattern: '/login', handler: handleLoginPage },
+
+  // ── Public API (no auth) ──────────────────────────────────────────
+  { method: 'GET', pattern: '/api/public/shared', handler: share.listPublicShared },
+  { method: 'GET', pattern: '/api/public/folder', handler: share.browsePublicFolder },
+  {
+    method: 'GET',
+    pattern: '/api/public/download/*',
+    handler: async (req, env, ctx) =>
+      (await serveWithEdgeCache(req, ctx, () => share.publicDownload(req, env)))!,
+  },
+
+  // ── Share routes (token-based, no session) ────────────────────────
+  { method: 'GET', pattern: '/s/:token', handler: download.handleSharePage },
+  { method: 'GET', pattern: '/s/:token/download', handler: download.handleShareDownload },
+  { method: 'GET', pattern: '/s/:token/preview', handler: download.handlePreview },
+  { method: 'GET', pattern: '/s/:token/folder-download', handler: download.handleFolderShareDownload },
+  { method: 'GET', pattern: '/s/:token/folder-preview', handler: download.handleFolderSharePreview },
+  { method: 'POST', pattern: '/s/:token/verify', handler: download.handleSharePassword },
+
+  // ── Admin page (session auth) ─────────────────────────────────────
+  { method: 'GET', pattern: '/admin', middleware: [authMiddleware], handler: handleAdminPage },
+
+  // ── Files API (session auth) ──────────────────────────────────────
+  { method: 'GET', pattern: '/api/files', middleware: [authMiddleware], handler: files.list },
+  { method: 'POST', pattern: '/api/files/upload', middleware: [authMiddleware], handler: files.upload },
+  { method: 'PUT', pattern: '/api/files/upload', middleware: [authMiddleware], handler: files.upload },
+  { method: 'POST', pattern: '/api/files/delete', middleware: [authMiddleware], handler: files.deleteFiles },
+  { method: 'POST', pattern: '/api/files/move', middleware: [authMiddleware], handler: files.moveFiles },
+  { method: 'POST', pattern: '/api/files/zip', middleware: [authMiddleware], handler: files.zipDownload },
+
+  { method: 'GET', pattern: '/api/files/:id/thumbnail', middleware: [authMiddleware], handler: files.thumbnail },
+  { method: 'GET', pattern: '/api/files/:id/preview', middleware: [authMiddleware], handler: files.preview },
+  { method: 'GET', pattern: '/api/files/:id/download', middleware: [authMiddleware], handler: files.download },
+
+  { method: 'GET', pattern: '/api/files/:id', middleware: [authMiddleware], handler: files.get },
+  { method: 'PUT', pattern: '/api/files/:id', middleware: [authMiddleware], handler: files.rename },
+  { method: 'DELETE', pattern: '/api/files/:id', middleware: [authMiddleware], handler: files.deleteFiles },
+
+  // ── Folders API (session auth) ────────────────────────────────────
+  { method: 'GET', pattern: '/api/folders', middleware: [authMiddleware], handler: files.listFolders },
+  { method: 'POST', pattern: '/api/folders', middleware: [authMiddleware], handler: files.createFolder },
+  { method: 'PUT', pattern: '/api/folders', middleware: [authMiddleware], handler: files.renameFolder },
+  { method: 'DELETE', pattern: '/api/folders', middleware: [authMiddleware], handler: files.deleteFolder },
+  { method: 'POST', pattern: '/api/folders/exclude', middleware: [authMiddleware], handler: share.toggleFolderExclude },
+  { method: 'POST', pattern: '/api/folders/share', middleware: [authMiddleware], handler: share.shareFolderToggle },
+  { method: 'GET', pattern: '/api/folders/shared', middleware: [authMiddleware], handler: share.listSharedFolders },
+
+  // ── Share API (session auth) ──────────────────────────────────────
+  { method: 'POST', pattern: '/api/share', middleware: [authMiddleware], handler: share.createShare },
+  { method: 'GET', pattern: '/api/share/:token', middleware: [authMiddleware], handler: share.getShareInfo },
+  { method: 'DELETE', pattern: '/api/share/:token', middleware: [authMiddleware], handler: share.revokeShare },
+
+  // ── Folder share link (folder path may contain '/', use wildcard) ─
+  { method: 'POST', pattern: '/api/folder-share-link', middleware: [authMiddleware], handler: share.createFolderShareLink },
+  { method: 'GET', pattern: '/api/folder-share-link/*', middleware: [authMiddleware], handler: share.getFolderShareLinkInfo },
+  { method: 'DELETE', pattern: '/api/folder-share-link/*', middleware: [authMiddleware], handler: share.revokeFolderShareLink },
+
+  // ── Stats / Settings ──────────────────────────────────────────────
+  { method: 'GET', pattern: '/api/stats', middleware: [authMiddleware], handler: stats.getStats },
+  { method: 'GET', pattern: '/api/settings', middleware: [authMiddleware], handler: settings.handleGetSettings },
+  { method: 'PUT', pattern: '/api/settings', middleware: [authMiddleware], handler: settings.handlePutSettings },
+
+  // ── WebDAV (basic auth; OPTIONS bypass handled inside webdavBasicAuth) ─
+  { method: '*', pattern: '/dav', middleware: [webdavBasicAuth], handler: handleWebDav },
+  { method: '*', pattern: '/dav/*', middleware: [webdavBasicAuth], handler: handleWebDav },
+]);
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -20,103 +97,17 @@ export default {
     }
 
     try {
-      // ── WebDAV endpoint (/dav or /dav/...) ──
-      if (path === '/dav' || path.startsWith('/dav/')) {
-        // OPTIONS may be sent without auth by some clients
-        if (method !== 'OPTIONS') {
-          const authHeader = request.headers.get('Authorization');
-          if (!authHeader || !authHeader.startsWith('Basic ')) {
-            return new Response('Unauthorized', {
-              status: 401,
-              headers: { 'WWW-Authenticate': 'Basic realm="CloudVault WebDAV"' },
-            });
-          }
-          const decoded = atob(authHeader.slice(6));
-          const colonIdx = decoded.indexOf(':');
-          const inputPassword = colonIdx >= 0 ? decoded.slice(colonIdx + 1) : decoded;
+      const routed = await router(request, env, ctx);
+      if (routed) return routed;
 
-          const encoder = new TextEncoder();
-          const inputHash = Array.from(
-            new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(inputPassword))),
-          )
-            .map((b) => b.toString(16).padStart(2, '0'))
-            .join('');
-          const storedHash = Array.from(
-            new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(env.ADMIN_PASSWORD))),
-          )
-            .map((b) => b.toString(16).padStart(2, '0'))
-            .join('');
-
-          const a = encoder.encode(inputHash);
-          const b = encoder.encode(storedHash);
-          if (a.byteLength !== b.byteLength || !crypto.subtle.timingSafeEqual(a, b)) {
-            return new Response('Unauthorized', {
-              status: 401,
-              headers: { 'WWW-Authenticate': 'Basic realm="CloudVault WebDAV"' },
-            });
-          }
-        }
-        return handleWebDav(request, env);
-      }
-
-      if (path === '/auth/login' && method === 'POST') {
-        return await handleLogin(request, env);
-      }
-      if (path === '/auth/logout') {
-        return await handleLogout(request, env);
-      }
-
-      if (path.startsWith('/s/')) {
-        return await handleShareRoutes(request, env, url, path, method);
-      }
-
-      if (path === '/login') {
-        const loginSettings = await getSettings(env);
-        let loginHtml = await fetchAssetHtml(env.ASSETS, request.url, '/login.html');
-        loginHtml = injectBranding(loginHtml, { siteName: loginSettings.siteName, siteIconUrl: loginSettings.siteIconUrl });
-        return new Response(loginHtml, {
-          headers: { 'Content-Type': 'text/html; charset=utf-8' },
-        });
-      }
-
-      if (path === '/api/public/shared' && method === 'GET') {
-        return await share.listPublicShared(request, env);
-      }
-      if (path === '/api/public/folder' && method === 'GET') {
-        return await share.browsePublicFolder(request, env);
-      }
-      if (path.startsWith('/api/public/download/') && method === 'GET') {
-        return (await serveWithEdgeCache(request, ctx, () => share.publicDownload(request, env)))!;
-      }
-
-      if (path === '/' && method === 'GET') {
-        return await handleRootPage(request, env);
-      }
-
-      if (path === '/admin' && method === 'GET') {
-        const authResponse = await authMiddleware(request, env, ctx);
-        if (authResponse) return authResponse;
-        const adminSettings = await getSettings(env);
-        let dashHtml = await fetchAssetHtml(env.ASSETS, request.url, '/dashboard.html');
-        dashHtml = injectBranding(dashHtml, { siteName: adminSettings.siteName, siteIconUrl: adminSettings.siteIconUrl });
-        return new Response(dashHtml, {
-          headers: { 'Content-Type': 'text/html; charset=utf-8' },
-        });
-      }
-
-      if (path.startsWith('/api/')) {
-        const authResponse = await authMiddleware(request, env, ctx);
-        if (authResponse) return authResponse;
-        return await handleApiRoutes(request, env, url, path, method);
-      }
-
-      // Serve static assets (css, js, images, fonts) without auth — needed by all pages
       if ((method === 'GET' || method === 'HEAD') && isStaticAsset(path)) {
         return env.ASSETS.fetch(request);
       }
 
       if (method === 'GET' || method === 'HEAD') {
-        const cleanResponse = await serveWithEdgeCache(request, ctx, () => download.handleCleanDownload(request, env));
+        const cleanResponse = await serveWithEdgeCache(request, ctx, () =>
+          download.handleCleanDownload(request, env),
+        );
         if (cleanResponse) return cleanResponse;
       }
 
@@ -124,7 +115,6 @@ export default {
       if (isAuth) return env.ASSETS.fetch(request);
 
       return await serve404Page(request, env);
-
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Internal server error';
       console.error('Unhandled error:', message);
@@ -132,197 +122,3 @@ export default {
     }
   },
 } satisfies ExportedHandler<Env>;
-
-async function handleRootPage(request: Request, env: Env): Promise<Response> {
-  const siteSettings = await getSettings(env);
-
-  if (!siteSettings.guestPageEnabled) {
-    const isAuth = await validateSession(request, env);
-    if (isAuth) return redirect('/admin');
-    return redirect('/login');
-  }
-
-  let guestHtml = await fetchAssetHtml(env.ASSETS, request.url, '/guest.html');
-  guestHtml = injectBranding(guestHtml, { siteName: siteSettings.siteName, siteIconUrl: siteSettings.siteIconUrl });
-  return new Response(guestHtml, {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
-  });
-}
-
-async function serveWithEdgeCache(
-  request: Request,
-  ctx: ExecutionContext,
-  handler: () => Promise<Response | null>,
-): Promise<Response | null> {
-  const cache = caches.default;
-  const cached = await cache.match(request);
-  if (cached) {
-    const headers = new Headers(cached.headers);
-    headers.set('X-Cache', 'HIT');
-    return new Response(cached.body, { status: cached.status, headers });
-  }
-
-  const response = await handler();
-  if (!response || !response.ok) return response;
-
-  ctx.waitUntil(cache.put(request, response.clone()));
-  response.headers.set('X-Cache', 'MISS');
-  return response;
-}
-
-const STATIC_EXTENSIONS = new Set([
-  '.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp', '.avif',
-  '.woff', '.woff2', '.ttf', '.eot', '.otf', '.map',
-]);
-
-function isStaticAsset(pathname: string): boolean {
-  const dot = pathname.lastIndexOf('.');
-  if (dot < 0) return false;
-  return STATIC_EXTENSIONS.has(pathname.slice(dot).toLowerCase());
-}
-
-async function serve404Page(request: Request, env: Env): Promise<Response> {
-  const siteSettings = await getSettings(env);
-  let notFoundHtml = await fetchAssetHtml(env.ASSETS, request.url, '/404.html');
-  notFoundHtml = injectBranding(notFoundHtml, { siteName: siteSettings.siteName, siteIconUrl: siteSettings.siteIconUrl });
-  return new Response(notFoundHtml, {
-    status: 404,
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
-  });
-}
-
-async function handleShareRoutes(
-  request: Request,
-  env: Env,
-  url: URL,
-  path: string,
-  method: string,
-): Promise<Response> {
-  const segments = path.split('/').filter(Boolean);
-
-  if (segments.length === 2 && method === 'GET') {
-    return download.handleSharePage(request, env);
-  }
-  if (segments.length === 3 && segments[2] === 'download' && method === 'GET') {
-    return download.handleShareDownload(request, env);
-  }
-  if (segments.length === 3 && segments[2] === 'preview' && method === 'GET') {
-    return download.handlePreview(request, env);
-  }
-  if (segments.length === 3 && segments[2] === 'folder-download' && method === 'GET') {
-    return download.handleFolderShareDownload(request, env);
-  }
-  if (segments.length === 3 && segments[2] === 'folder-preview' && method === 'GET') {
-    return download.handleFolderSharePreview(request, env);
-  }
-  if (segments.length === 3 && segments[2] === 'verify' && method === 'POST') {
-    return download.handleSharePassword(request, env);
-  }
-
-  return error('Not found', 404);
-}
-
-async function handleApiRoutes(
-  request: Request,
-  env: Env,
-  url: URL,
-  path: string,
-  method: string,
-): Promise<Response> {
-  if (path === '/api/files' && method === 'GET') {
-    return files.list(request, env);
-  }
-  if (path === '/api/files/upload' && method === 'POST') {
-    return files.upload(request, env);
-  }
-  if (path === '/api/files/upload' && method === 'PUT') {
-    return files.upload(request, env);
-  }
-  if (path === '/api/files/delete' && method === 'POST') {
-    return files.deleteFiles(request, env);
-  }
-
-  const filesMatch = path.match(/^\/api\/files\/([^/]+)$/);
-  if (filesMatch) {
-    if (method === 'GET') return files.get(request, env);
-    if (method === 'PUT') return files.rename(request, env);
-    if (method === 'DELETE') return files.deleteFiles(request, env);
-  }
-
-  const thumbnailMatch = path.match(/^\/api\/files\/([^/]+)\/thumbnail$/);
-  if (thumbnailMatch && method === 'GET') {
-    return files.thumbnail(request, env);
-  }
-
-  const previewMatch = path.match(/^\/api\/files\/([^/]+)\/preview$/);
-  if (previewMatch && method === 'GET') {
-    return files.preview(request, env);
-  }
-
-  const fileDownloadMatch = path.match(/^\/api\/files\/([^/]+)\/download$/);
-  if (fileDownloadMatch && method === 'GET') {
-    return files.download(request, env);
-  }
-
-  if (path === '/api/files/zip' && method === 'POST') {
-    return files.zipDownload(request, env);
-  }
-
-  if (path === '/api/folders' && method === 'GET') {
-    return files.listFolders(request, env);
-  }
-  if (path === '/api/folders' && method === 'POST') {
-    return files.createFolder(request, env);
-  }
-  if (path === '/api/folders' && method === 'DELETE') {
-    return files.deleteFolder(request, env);
-  }
-  if (path === '/api/folders' && method === 'PUT') {
-    return files.renameFolder(request, env);
-  }
-  if (path === '/api/folders/exclude' && method === 'POST') {
-    return share.toggleFolderExclude(request, env);
-  }
-  if (path === '/api/folders/share' && method === 'POST') {
-    return share.shareFolderToggle(request, env);
-  }
-  if (path === '/api/folders/shared' && method === 'GET') {
-    return share.listSharedFolders(request, env);
-  }
-  if (path === '/api/files/move' && method === 'POST') {
-    return files.moveFiles(request, env);
-  }
-
-  if (path === '/api/share' && method === 'POST') {
-    return share.createShare(request, env);
-  }
-
-  const shareMatch = path.match(/^\/api\/share\/([^/]+)$/);
-  if (shareMatch) {
-    if (method === 'DELETE') return share.revokeShare(request, env);
-    if (method === 'GET') return share.getShareInfo(request, env);
-  }
-
-  if (path === '/api/folder-share-link' && method === 'POST') {
-    return share.createFolderShareLink(request, env);
-  }
-  if (path.startsWith('/api/folder-share-link/') && method === 'DELETE') {
-    return share.revokeFolderShareLink(request, env);
-  }
-  if (path.startsWith('/api/folder-share-link/') && method === 'GET') {
-    return share.getFolderShareLinkInfo(request, env);
-  }
-
-  if (path === '/api/stats' && method === 'GET') {
-    return stats.getStats(request, env);
-  }
-
-  if (path === '/api/settings' && method === 'GET') {
-    return settings.handleGetSettings(request, env);
-  }
-  if (path === '/api/settings' && method === 'PUT') {
-    return settings.handlePutSettings(request, env);
-  }
-
-  return error('Not found', 404);
-}

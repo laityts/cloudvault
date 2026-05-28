@@ -138,3 +138,48 @@ export async function authMiddleware(
   if (!valid) return redirect('/login');
   return null;
 }
+
+const WEBDAV_REALM = 'CloudVault WebDAV';
+
+function unauthorizedDav(): Response {
+  return new Response('Unauthorized', {
+    status: 401,
+    headers: { 'WWW-Authenticate': `Basic realm="${WEBDAV_REALM}"` },
+  });
+}
+
+/**
+ * Basic-Auth gate for the /dav endpoint. Returns a 401 Response when the
+ * header is missing or password mismatches; returns null when authenticated.
+ * OPTIONS preflight from WebDAV clients is allowed through unauthenticated
+ * (matches the prior inline behavior in index.ts).
+ */
+export async function webdavBasicAuth(request: Request, env: Env): Promise<Response | null> {
+  if (request.method === 'OPTIONS') return null;
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader || !authHeader.startsWith('Basic ')) {
+    return unauthorizedDav();
+  }
+  const decoded = atob(authHeader.slice(6));
+  const colonIdx = decoded.indexOf(':');
+  const inputPassword = colonIdx >= 0 ? decoded.slice(colonIdx + 1) : decoded;
+
+  const encoder = new TextEncoder();
+  const inputHash = Array.from(
+    new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(inputPassword))),
+  )
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  const storedHash = Array.from(
+    new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(env.ADMIN_PASSWORD))),
+  )
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+
+  const a = encoder.encode(inputHash);
+  const b = encoder.encode(storedHash);
+  if (a.byteLength !== b.byteLength || !crypto.subtle.timingSafeEqual(a, b)) {
+    return unauthorizedDav();
+  }
+  return null;
+}
