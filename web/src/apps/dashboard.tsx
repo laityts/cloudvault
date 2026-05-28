@@ -607,7 +607,7 @@ function DashboardApp() {
       </Show>
 
       {/* Sidebar drawer (mobile) */}
-      <Drawer open={sidebarOpen()} onClose={() => setSidebarOpen(false)} side="left">
+      <Drawer open={sidebarOpen()} onClose={() => setSidebarOpen(false)} side="left" width="min(76vw, 240px)">
         <div class="px-2 py-3 overflow-y-auto safe-pb">
           <FolderTree
             store={store}
