@@ -21,6 +21,8 @@ export interface FolderInfo {
   shared: boolean;
   directlyShared: boolean;
   excluded: boolean;
+  subfolderCount?: number;
+  fileCount?: number;
 }
 
 export interface FileListResponse {
