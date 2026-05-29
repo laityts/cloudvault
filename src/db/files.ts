@@ -190,3 +190,42 @@ export async function incrementDownloads(env: Env, id: string): Promise<void> {
     .bind(id)
     .run();
 }
+
+/** 按 SHA-256 查找文件（用于内容去重）。 */
+export async function findFileBySha256(env: Env, sha256: string): Promise<FileMeta | null> {
+  const row = await env.VAULT_DB
+    .prepare('SELECT * FROM files WHERE sha256 = ? LIMIT 1')
+    .bind(sha256)
+    .first<FileRow>();
+  return row ? rowToMeta(row) : null;
+}
+
+/** 列出所有 SHA-256 重复的文件，按 sha256 分组、组内按 uploaded_at 升序。 */
+export async function listDuplicatesBySha256(env: Env): Promise<Array<{ sha256: string; files: FileMeta[] }>> {
+  const { results } = await env.VAULT_DB
+    .prepare(
+      `SELECT * FROM files
+       WHERE sha256 IS NOT NULL
+         AND sha256 IN (
+           SELECT sha256 FROM files
+           WHERE sha256 IS NOT NULL
+           GROUP BY sha256
+           HAVING COUNT(*) > 1
+         )
+       ORDER BY sha256, uploaded_at`,
+    )
+    .all<FileRow>();
+
+  const groups = new Map<string, FileMeta[]>();
+  for (const row of results ?? []) {
+    const meta = rowToMeta(row);
+    if (!meta.sha256) continue;
+    let arr = groups.get(meta.sha256);
+    if (!arr) {
+      arr = [];
+      groups.set(meta.sha256, arr);
+    }
+    arr.push(meta);
+  }
+  return Array.from(groups, ([sha256, files]) => ({ sha256, files }));
+}
