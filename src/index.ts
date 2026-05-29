@@ -9,6 +9,7 @@ import * as share from './api/share';
 import * as pub from './api/public';
 import * as stats from './api/stats';
 import * as settings from './api/settings';
+import * as admin from './api/admin';
 import * as download from './handlers/download';
 import { handleRootPage, handleLoginPage, handleAdminPage, serve404Page } from './handlers/pages';
 import { handleWebDav } from './handlers/webdav';
@@ -55,6 +56,7 @@ const router = createRouter([
   { method: 'GET', pattern: '/api/files/:id/thumbnail', middleware: [authMiddleware], handler: media.thumbnail },
   { method: 'GET', pattern: '/api/files/:id/preview', middleware: [authMiddleware], handler: media.preview },
   { method: 'GET', pattern: '/api/files/:id/download', middleware: [authMiddleware], handler: files.download },
+  { method: 'GET', pattern: '/api/files/:id/info', middleware: [authMiddleware], handler: files.info },
 
   { method: 'GET', pattern: '/api/files/:id', middleware: [authMiddleware], handler: files.get },
   { method: 'PUT', pattern: '/api/files/:id', middleware: [authMiddleware], handler: files.rename },
@@ -84,6 +86,9 @@ const router = createRouter([
   { method: 'GET', pattern: '/api/stats', middleware: [authMiddleware], handler: stats.getStats },
   { method: 'GET', pattern: '/api/settings', middleware: [authMiddleware], handler: settings.handleGetSettings },
   { method: 'PUT', pattern: '/api/settings', middleware: [authMiddleware], handler: settings.handlePutSettings },
+
+  // ── Admin (session auth, destructive) ─────────────────────────────
+  { method: 'POST', pattern: '/api/admin/reset-all', middleware: [authMiddleware], handler: admin.resetAll },
 
   // ── WebDAV (basic auth; OPTIONS bypass handled inside webdavBasicAuth) ─
   { method: '*', pattern: '/dav', middleware: [webdavBasicAuth], handler: handleWebDav },
