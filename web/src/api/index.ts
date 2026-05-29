@@ -35,6 +35,10 @@ export function renameFile(id: string, name: string) {
   return apiFetch<{ message?: string }>(`/api/files/${id}`, { method: 'PUT', body: { name } });
 }
 
+export function getFileInfo(id: string): Promise<FileMeta> {
+  return apiFetch<FileMeta>(`/api/files/${id}/info`);
+}
+
 export function moveFiles(ids: string[], targetFolder: string) {
   return apiFetch<{ moved: number }>('/api/files/move', { method: 'POST', body: { ids, targetFolder } });
 }
@@ -96,6 +100,14 @@ export function getSettings(): Promise<SiteSettings> {
 
 export function saveSettings(settings: SiteSettings) {
   return apiFetch<SiteSettings>('/api/settings', { method: 'PUT', body: settings });
+}
+
+// ─── Admin (destructive) ─────────────────────────────────────────────────
+
+export function resetAllData(): Promise<{ success: boolean; deletedFiles: number }> {
+  return apiFetch<{ success: boolean; deletedFiles: number }>('/api/admin/reset-all', {
+    method: 'POST',
+  });
 }
 
 // ─── Share (single-file) ─────────────────────────────────────────────────

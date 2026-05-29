@@ -12,6 +12,8 @@ export interface FileMeta {
   sharePassword: string | null;
   shareExpiresAt: string | null;
   downloads: number;
+  sha1?: string | null;
+  sha256?: string | null;
 }
 
 export interface FolderInfo {
