@@ -62,106 +62,151 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
   }
 
   const encoder = new TextEncoder();
-  // Fetch all R2 objects in parallel; preserve order via Promise.all index alignment.
-  // Then read arrayBuffer in parallel as well — both are I/O bound and benefit
-  // from concurrency despite the sequential ZIP assembly that follows.
-  const r2Objects = await Promise.all(fileMetas.map((m) => env.VAULT_BUCKET.get(m.key)));
-  const buffers = await Promise.all(
-    r2Objects.map((o) => (o ? o.arrayBuffer() : Promise.resolve(null))),
-  );
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
 
-  const parts: Uint8Array[] = [];
-  const centralDir: Uint8Array[] = [];
-  let offset = 0;
+  // Stream zip body asynchronously; do not await before returning Response.
+  (async () => {
+    try {
+      let offset = 0;
+      const centralDir: Uint8Array[] = [];
 
-  for (let i = 0; i < fileMetas.length; i++) {
-    const meta = fileMetas[i]!;
-    const buf = buffers[i];
-    if (!buf) continue;
+      for (const meta of fileMetas) {
+        const obj = await env.VAULT_BUCKET.get(meta.key);
+        if (!obj) continue;
 
-    const fileData = new Uint8Array(buf);
-    const fileName = encoder.encode(meta.name);
-    const crc = crc32(fileData);
+        const fileName = encoder.encode(meta.name);
+        const localHeader = buildLocalHeader(fileName);
+        await writer.write(localHeader);
 
-    const localHeader = new Uint8Array(30 + fileName.length);
-    const lv = new DataView(localHeader.buffer);
-    lv.setUint32(0, 0x04034b50, true);
-    lv.setUint16(4, 20, true);
-    lv.setUint16(6, 0, true);
-    lv.setUint16(8, 0, true);
-    lv.setUint16(10, 0, true);
-    lv.setUint16(12, 0, true);
-    lv.setUint32(14, crc, true);
-    lv.setUint32(18, fileData.length, true);
-    lv.setUint32(22, fileData.length, true);
-    lv.setUint16(26, fileName.length, true);
-    lv.setUint16(28, 0, true);
-    localHeader.set(fileName, 30);
+        let crc = CRC32_INIT;
+        let size = 0;
+        const reader = obj.body.getReader();
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            crc = crc32Update(crc, value);
+            size += value.length;
+            await writer.write(value);
+          }
+        } finally {
+          try { reader.releaseLock(); } catch { /* ignore */ }
+        }
+        const finalCrc = crc32Final(crc);
 
-    const cdEntry = new Uint8Array(46 + fileName.length);
-    const cv = new DataView(cdEntry.buffer);
-    cv.setUint32(0, 0x02014b50, true);
-    cv.setUint16(4, 20, true);
-    cv.setUint16(6, 20, true);
-    cv.setUint16(8, 0, true);
-    cv.setUint16(10, 0, true);
-    cv.setUint16(12, 0, true);
-    cv.setUint16(14, 0, true);
-    cv.setUint32(16, crc, true);
-    cv.setUint32(20, fileData.length, true);
-    cv.setUint32(24, fileData.length, true);
-    cv.setUint16(28, fileName.length, true);
-    cv.setUint16(30, 0, true);
-    cv.setUint16(32, 0, true);
-    cv.setUint16(34, 0, true);
-    cv.setUint16(36, 0, true);
-    cv.setUint32(38, 0, true);
-    cv.setUint32(42, offset, true);
-    cdEntry.set(fileName, 46);
+        const descriptor = buildDataDescriptor(finalCrc, size);
+        await writer.write(descriptor);
 
-    parts.push(localHeader);
-    parts.push(fileData);
-    centralDir.push(cdEntry);
-    offset += localHeader.length + fileData.length;
-  }
+        centralDir.push(buildCentralDirEntry(fileName, finalCrc, size, offset));
+        offset += localHeader.length + size + descriptor.length;
+      }
 
-  let cdSize = 0;
-  for (const cd of centralDir) cdSize += cd.length;
-  const eocd = new Uint8Array(22);
-  const ev = new DataView(eocd.buffer);
-  ev.setUint32(0, 0x06054b50, true);
-  ev.setUint16(4, 0, true);
-  ev.setUint16(6, 0, true);
-  ev.setUint16(8, centralDir.length, true);
-  ev.setUint16(10, centralDir.length, true);
-  ev.setUint32(12, cdSize, true);
-  ev.setUint32(16, offset, true);
-  ev.setUint16(20, 0, true);
-
-  const totalSize = offset + cdSize + 22;
-  const zipBuffer = new Uint8Array(totalSize);
-  let pos = 0;
-  for (const part of parts) { zipBuffer.set(part, pos); pos += part.length; }
-  for (const cd of centralDir) { zipBuffer.set(cd, pos); pos += cd.length; }
-  zipBuffer.set(eocd, pos);
+      let cdSize = 0;
+      for (const cd of centralDir) {
+        await writer.write(cd);
+        cdSize += cd.length;
+      }
+      await writer.write(buildEOCD(centralDir.length, cdSize, offset));
+    } catch (err) {
+      try { await writer.abort(err); } catch { /* ignore */ }
+      return;
+    }
+    await writer.close();
+  })();
 
   const zipName = 'cloudvault-' + new Date().toISOString().slice(0, 10) + '.zip';
-  return new Response(zipBuffer, {
+  return new Response(readable, {
     headers: {
       'Content-Type': 'application/zip',
       'Content-Disposition': 'attachment; filename="' + zipName + '"',
-      'Content-Length': String(totalSize),
     },
   });
 }
 
-function crc32(data: Uint8Array): number {
-  let crc = 0xFFFFFFFF;
+const CRC32_INIT = 0xFFFFFFFF;
+
+function crc32Update(crc: number, data: Uint8Array): number {
   for (let i = 0; i < data.length; i++) {
     crc ^= data[i]!;
     for (let j = 0; j < 8; j++) {
       crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
     }
   }
+  return crc;
+}
+
+function crc32Final(crc: number): number {
   return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+function buildLocalHeader(fileName: Uint8Array): Uint8Array {
+  const buf = new Uint8Array(30 + fileName.length);
+  const v = new DataView(buf.buffer);
+  v.setUint32(0, 0x04034b50, true);
+  v.setUint16(4, 20, true);
+  v.setUint16(6, 0x0008, true); // GP flag: bit 3 = data descriptor follows
+  v.setUint16(8, 0, true);      // stored
+  v.setUint16(10, 0, true);     // mod time
+  v.setUint16(12, 0, true);     // mod date
+  v.setUint32(14, 0, true);     // crc32 = 0 (in data descriptor)
+  v.setUint32(18, 0, true);     // compressed size = 0
+  v.setUint32(22, 0, true);     // uncompressed size = 0
+  v.setUint16(26, fileName.length, true);
+  v.setUint16(28, 0, true);     // extra length
+  buf.set(fileName, 30);
+  return buf;
+}
+
+function buildDataDescriptor(crc: number, size: number): Uint8Array {
+  const buf = new Uint8Array(16);
+  const v = new DataView(buf.buffer);
+  v.setUint32(0, 0x08074b50, true);
+  v.setUint32(4, crc, true);
+  v.setUint32(8, size, true);   // compressed size (stored = uncompressed)
+  v.setUint32(12, size, true);  // uncompressed size
+  return buf;
+}
+
+function buildCentralDirEntry(
+  fileName: Uint8Array,
+  crc: number,
+  size: number,
+  localHeaderOffset: number,
+): Uint8Array {
+  const buf = new Uint8Array(46 + fileName.length);
+  const v = new DataView(buf.buffer);
+  v.setUint32(0, 0x02014b50, true);
+  v.setUint16(4, 20, true);     // version made by
+  v.setUint16(6, 20, true);     // version needed
+  v.setUint16(8, 0x0008, true); // GP flag: bit 3
+  v.setUint16(10, 0, true);     // stored
+  v.setUint16(12, 0, true);     // mod time
+  v.setUint16(14, 0, true);     // mod date
+  v.setUint32(16, crc, true);
+  v.setUint32(20, size, true);  // compressed size
+  v.setUint32(24, size, true);  // uncompressed size
+  v.setUint16(28, fileName.length, true);
+  v.setUint16(30, 0, true);     // extra length
+  v.setUint16(32, 0, true);     // comment length
+  v.setUint16(34, 0, true);     // disk number
+  v.setUint16(36, 0, true);     // internal attrs
+  v.setUint32(38, 0, true);     // external attrs
+  v.setUint32(42, localHeaderOffset, true);
+  buf.set(fileName, 46);
+  return buf;
+}
+
+function buildEOCD(entryCount: number, cdSize: number, cdOffset: number): Uint8Array {
+  const buf = new Uint8Array(22);
+  const v = new DataView(buf.buffer);
+  v.setUint32(0, 0x06054b50, true);
+  v.setUint16(4, 0, true);              // disk number
+  v.setUint16(6, 0, true);              // disk with cd
+  v.setUint16(8, entryCount, true);     // entries on this disk
+  v.setUint16(10, entryCount, true);    // total entries
+  v.setUint32(12, cdSize, true);
+  v.setUint32(16, cdOffset, true);
+  v.setUint16(20, 0, true);             // comment length
+  return buf;
 }
