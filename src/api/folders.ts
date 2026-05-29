@@ -162,11 +162,29 @@ export async function listFolders(_request: Request, env: Env): Promise<Response
     }
   }
 
+  // 统计每个文件夹的直接文件数
+  const fileCountMap = new Map<string, number>();
+  for (const file of allFiles) {
+    const folder = file.folder || 'root';
+    fileCountMap.set(folder, (fileCountMap.get(folder) || 0) + 1);
+  }
+
+  // 统计每个文件夹的直接子文件夹数
+  const subfolderCountMap = new Map<string, number>();
+  for (const folderPath of folderSet) {
+    const parentPath = folderPath.includes('/')
+      ? folderPath.substring(0, folderPath.lastIndexOf('/'))
+      : 'root';
+    subfolderCountMap.set(parentPath, (subfolderCountMap.get(parentPath) || 0) + 1);
+  }
+
   const folderList = Array.from(folderSet).sort().map((name) => ({
     name,
     shared: isFolderShared(name, sharedFolders, excludedFolders),
     directlyShared: sharedFolders.has(name),
     excluded: excludedFolders.has(name),
+    subfolderCount: subfolderCountMap.get(name) || 0,
+    fileCount: fileCountMap.get(name) || 0,
   }));
 
   return json({ folders: folderList });
