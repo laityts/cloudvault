@@ -21,6 +21,10 @@ export interface FileMeta {
   sharePassword: string | null; // bcrypt-style hash (null = no password)
   shareExpiresAt: string | null; // ISO 8601 or null
   downloads: number;
+  /** Hex-encoded SHA-1, lazily computed on first /info request. */
+  sha1: string | null;
+  /** Hex-encoded SHA-256, lazily computed on first /info request. */
+  sha256: string | null;
 }
 
 // ─── Share Link Info ──────────────────────────────────────────────────

@@ -12,6 +12,8 @@ interface FileRow {
   share_password: string | null;
   share_expires_at: string | null;
   downloads: number;
+  sha1: string | null;
+  sha256: string | null;
 }
 
 function rowToMeta(row: FileRow): FileMeta {
@@ -27,6 +29,8 @@ function rowToMeta(row: FileRow): FileMeta {
     sharePassword: row.share_password,
     shareExpiresAt: row.share_expires_at,
     downloads: row.downloads,
+    sha1: row.sha1 ?? null,
+    sha256: row.sha256 ?? null,
   };
 }
 
@@ -65,8 +69,9 @@ export async function putFile(env: Env, meta: FileMeta): Promise<void> {
   await env.VAULT_DB
     .prepare(
       `INSERT INTO files (id, key, name, size, type, folder, uploaded_at,
-                          share_token, share_password, share_expires_at, downloads)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          share_token, share_password, share_expires_at, downloads,
+                          sha1, sha256)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          key = excluded.key,
          name = excluded.name,
@@ -77,13 +82,29 @@ export async function putFile(env: Env, meta: FileMeta): Promise<void> {
          share_token = excluded.share_token,
          share_password = excluded.share_password,
          share_expires_at = excluded.share_expires_at,
-         downloads = excluded.downloads`,
+         downloads = excluded.downloads,
+         sha1 = excluded.sha1,
+         sha256 = excluded.sha256`,
     )
     .bind(
       meta.id, meta.key, meta.name, meta.size, meta.type, meta.folder,
       meta.uploadedAt, meta.shareToken, meta.sharePassword,
       meta.shareExpiresAt, meta.downloads,
+      meta.sha1, meta.sha256,
     )
+    .run();
+}
+
+/** 单独更新文件的 sha1 / sha256 — 用于 /info 端点流式计算后的回写。 */
+export async function updateFileHashes(
+  env: Env,
+  id: string,
+  sha1: string,
+  sha256: string,
+): Promise<void> {
+  await env.VAULT_DB
+    .prepare('UPDATE files SET sha1 = ?, sha256 = ? WHERE id = ?')
+    .bind(sha1, sha256, id)
     .run();
 }
 

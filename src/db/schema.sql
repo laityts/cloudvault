@@ -10,7 +10,9 @@ CREATE TABLE files (
   share_token     TEXT,
   share_password  TEXT,
   share_expires_at TEXT,
-  downloads       INTEGER NOT NULL DEFAULT 0
+  downloads       INTEGER NOT NULL DEFAULT 0,
+  sha1            TEXT,
+  sha256          TEXT
 );
 CREATE INDEX idx_files_folder       ON files(folder);
 CREATE INDEX idx_files_uploaded_at  ON files(uploaded_at DESC);
