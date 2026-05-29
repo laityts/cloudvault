@@ -31,5 +31,7 @@ export function createFileMeta(input: CreateFileMetaInput): FileMeta {
     sharePassword: null,
     shareExpiresAt: null,
     downloads: 0,
+    sha1: null,
+    sha256: null,
   };
 }

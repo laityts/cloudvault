@@ -4,12 +4,14 @@ import { parseJson } from '../utils/validate';
 import { buildR2Key, extractPathParam, isUnsafeKey } from '../utils/keys';
 import { createFileMeta } from '../utils/file-meta';
 import { streamR2Object } from '../utils/r2';
+import { computeHashes } from '../utils/hash';
 import {
   getFile,
   putFile,
   deleteFile,
   listFilesInFolder,
   searchFiles,
+  updateFileHashes,
 } from '../db/files';
 
 export async function upload(request: Request, env: Env): Promise<Response> {
@@ -250,4 +252,32 @@ export async function moveFiles(request: Request, env: Env): Promise<Response> {
   );
 
   return json({ moved: results.filter(Boolean).length });
+}
+
+export async function info(request: Request, env: Env): Promise<Response> {
+  const id = extractPathParam(new URL(request.url), 'files');
+  if (!id) return error('File ID required', 400);
+
+  const meta = await getFile(env, id);
+  if (!meta) return error('File not found', 404);
+
+  if (meta.sha1 && meta.sha256) {
+    return json(meta);
+  }
+
+  const object = await env.VAULT_BUCKET.get(meta.key);
+  if (!object) return error('File not found in storage', 404);
+
+  try {
+    const { sha1, sha256 } = await computeHashes(object.body);
+    await updateFileHashes(env, id, sha1, sha256);
+    meta.sha1 = sha1;
+    meta.sha256 = sha256;
+    return json(meta);
+  } catch (e) {
+    return error(
+      e instanceof Error ? e.message : 'Hash computation failed',
+      500,
+    );
+  }
 }

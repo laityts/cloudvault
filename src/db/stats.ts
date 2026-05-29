@@ -12,6 +12,8 @@ interface FileRow {
   share_password: string | null;
   share_expires_at: string | null;
   downloads: number;
+  sha1: string | null;
+  sha256: string | null;
 }
 
 function rowToMeta(row: FileRow): FileMeta {
@@ -27,6 +29,8 @@ function rowToMeta(row: FileRow): FileMeta {
     sharePassword: row.share_password,
     shareExpiresAt: row.share_expires_at,
     downloads: row.downloads,
+    sha1: row.sha1 ?? null,
+    sha256: row.sha256 ?? null,
   };
 }
 
