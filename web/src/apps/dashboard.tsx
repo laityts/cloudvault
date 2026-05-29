@@ -444,7 +444,7 @@ function DashboardApp() {
       <div class="flex-1 flex min-h-0">
         {/* SIDEBAR — desktop */}
         <Show when={isDesktop()}>
-          <aside class="w-60 shrink-0 border-r hairline overflow-y-auto bg-bg-base/40">
+          <aside class="w-60 shrink-0 border-r hairline overflow-y-auto bg-bg-base/40 flex flex-col">
             <div class="px-2 py-3">
               <FolderTree
                 store={store}
@@ -454,7 +454,7 @@ function DashboardApp() {
                 }}
               />
             </div>
-            <div class="mt-4 px-4 pb-4 border-t hairline pt-4">
+            <div class="mt-auto px-4 pb-4 border-t hairline pt-4">
               <p class="text-[11px] text-fg-subtle uppercase tracking-wide mb-1.5">存储</p>
               <div class="h-1.5 rounded-full bg-bg-hover overflow-hidden">
                 <div
