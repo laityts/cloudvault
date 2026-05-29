@@ -126,14 +126,56 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
 
 const CRC32_INIT = 0xFFFFFFFF;
 
-function crc32Update(crc: number, data: Uint8Array): number {
-  for (let i = 0; i < data.length; i++) {
-    crc ^= data[i]!;
-    for (let j = 0; j < 8; j++) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
+const CRC32_TABLES: Uint32Array[] = (() => {
+  const t: Uint32Array[] = Array.from({ length: 8 }, () => new Uint32Array(256));
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    t[0]![n] = c >>> 0;
+  }
+  for (let n = 0; n < 256; n++) {
+    let c = t[0]![n]!;
+    for (let k = 1; k < 8; k++) {
+      c = (t[0]![c & 0xff]! ^ (c >>> 8)) >>> 0;
+      t[k]![n] = c;
     }
   }
-  return crc;
+  return t;
+})();
+
+function crc32Update(crc: number, data: Uint8Array): number {
+  let c = crc >>> 0;
+  let i = 0;
+  const len = data.length;
+  const aligned = len - (len % 8);
+
+  // 主循环：每次吃 8 字节
+  while (i < aligned) {
+    const b0 = data[i]!,     b1 = data[i + 1]!, b2 = data[i + 2]!, b3 = data[i + 3]!;
+    const b4 = data[i + 4]!, b5 = data[i + 5]!, b6 = data[i + 6]!, b7 = data[i + 7]!;
+    const lo = ((c ^ b0) & 0xff) | (((c >>> 8) ^ b1) & 0xff) << 8 | (((c >>> 16) ^ b2) & 0xff) << 16 | (((c >>> 24) ^ b3) & 0xff) << 24;
+    c = (
+      CRC32_TABLES[7]![lo & 0xff]! ^
+      CRC32_TABLES[6]![(lo >>> 8) & 0xff]! ^
+      CRC32_TABLES[5]![(lo >>> 16) & 0xff]! ^
+      CRC32_TABLES[4]![(lo >>> 24) & 0xff]! ^
+      CRC32_TABLES[3]![b4]! ^
+      CRC32_TABLES[2]![b5]! ^
+      CRC32_TABLES[1]![b6]! ^
+      CRC32_TABLES[0]![b7]!
+    ) >>> 0;
+    i += 8;
+  }
+
+  // 尾巴 byte-wise
+  while (i < len) {
+    c = (CRC32_TABLES[0]![(c ^ data[i]!) & 0xff]! ^ (c >>> 8)) >>> 0;
+    i++;
+  }
+
+  return c;
 }
 
 function crc32Final(crc: number): number {
