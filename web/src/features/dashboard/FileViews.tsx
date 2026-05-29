@@ -162,7 +162,7 @@ const FileCard: Component<{
           'absolute top-1.5 left-1.5 z-10 w-5 h-5 rounded-md border flex items-center justify-center transition',
           selected()
             ? 'bg-brand border-brand text-fg-onAccent'
-            : 'bg-bg-surface/85 border-line opacity-0 group-hover:opacity-100',
+            : 'bg-bg-surface/85 border-line opacity-100 md:opacity-0 md:group-hover:opacity-100',
           (selectionMode() || selected()) && 'opacity-100',
         )}
         aria-label={selected() ? 'Deselect' : 'Select'}
