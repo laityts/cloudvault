@@ -155,14 +155,10 @@ export async function listFolders(_request: Request, env: Env): Promise<Response
     if (fr.path) folderSet.add(fr.path);
   }
 
-  // 从文件记录中提取文件夹路径（用于发现未在 folders 表中的文件夹）
-  const foldersFromFiles = await env.VAULT_DB
-    .prepare('SELECT DISTINCT folder FROM files WHERE folder != ?')
-    .bind('root')
-    .all<{ folder: string }>();
-
-  for (const row of foldersFromFiles.results || []) {
-    if (row.folder) folderSet.add(row.folder);
+  // 发现未在 folders 表中、仅由文件隐含的文件夹。
+  // fileCountMap 的键即 files 表中全部 distinct folder，无需再做一次整表查询。
+  for (const folder of fileCountMap.keys()) {
+    if (folder && folder !== 'root') folderSet.add(folder);
   }
 
   for (const folder of [...folderSet]) {
