@@ -393,6 +393,11 @@ function DashboardApp() {
     return TYPE_FILTERS.find((t) => t.v === v)?.label ?? '全部';
   });
 
+  const allSelected = createMemo(() => {
+    const files = store.filteredFiles();
+    return files.length > 0 && files.every((f) => store.isSelected(f.id));
+  });
+
   // Update doc title once branding is settled
   createEffect(() => {
     applyBrandingToDocument(branding());
@@ -567,20 +572,9 @@ function DashboardApp() {
               <Button
                 variant="ghost"
                 size="xs"
-                onClick={() => {
-                  const files = store.filteredFiles();
-                  const allSelected =
-                    files.length > 0 && files.every((f) => store.isSelected(f.id));
-                  if (allSelected) store.clearSelection();
-                  else store.selectAll();
-                }}
+                onClick={() => (allSelected() ? store.clearSelection() : store.selectAll())}
               >
-                {(() => {
-                  const files = store.filteredFiles();
-                  const allSelected =
-                    files.length > 0 && files.every((f) => store.isSelected(f.id));
-                  return allSelected ? '取消全选' : '全选';
-                })()}
+                {allSelected() ? '取消全选' : '全选'}
               </Button>
               <Button variant="ghost" size="xs" leadingIcon={<IconDownload size={12} />} onClick={downloadZip}>
                 <span class="hidden sm:inline">打包下载</span>
