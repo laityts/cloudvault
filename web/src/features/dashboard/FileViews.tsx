@@ -2,7 +2,7 @@ import { For, Show, type Component } from 'solid-js';
 import { cn } from '~/lib/cn';
 import { fileCategory } from '~/lib/fileKind';
 import { formatBytes, formatRelativeDate } from '~/lib/format';
-import { FileIcon, IconCheck, IconLink, IconChevronUp, IconChevronDown, IconMoreVertical, IconChevronRight, IconShare } from '~/ui';
+import { FileIcon, IconCheck, IconLink, IconChevronUp, IconChevronDown, IconMoreVertical, IconChevronRight, IconShare, IconFolder, IconFile } from '~/ui';
 import type { FileMeta, FolderInfo } from '~/api/types';
 import type { DashboardStore, SortKey } from './store';
 import { longpress } from '~/lib/longpress';
@@ -91,7 +91,20 @@ const FolderCard: Component<{
       {folderLabel(props.folder.name)}
     </div>
     <div class="flex items-center justify-between mt-0.5 text-[11px] text-fg-muted">
-      <span>文件夹</span>
+      <div class="inline-flex items-center gap-1.5">
+        <Show when={(props.folder.subfolderCount ?? 0) > 0}>
+          <span class="inline-flex items-center gap-0.5">
+            <IconFolder size={11} />
+            {props.folder.subfolderCount}
+          </span>
+        </Show>
+        <Show when={(props.folder.fileCount ?? 0) > 0}>
+          <span class="inline-flex items-center gap-0.5">
+            <IconFile size={11} />
+            {props.folder.fileCount}
+          </span>
+        </Show>
+      </div>
       <Show when={props.folder.shared || props.folder.directlyShared}>
         <span class="text-brand inline-flex items-center gap-0.5" title={props.folder.directlyShared ? '已分享' : '继承分享'}>
           <IconShare size={10} />
