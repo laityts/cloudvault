@@ -147,23 +147,24 @@ export async function listFilesByFolderPrefix(
 export async function searchFiles(
   env: Env,
   searchTerm: string,
+  folder?: string | null,
   limit?: number,
 ): Promise<FileMeta[]> {
   const pattern = '%' + searchTerm.toLowerCase() + '%';
-  const query = limit
-    ? `SELECT * FROM files
-       WHERE LOWER(name) LIKE ?
-       ORDER BY uploaded_at DESC
-       LIMIT ?`
-    : `SELECT * FROM files
-       WHERE LOWER(name) LIKE ?
-       ORDER BY uploaded_at DESC`;
+  // folder 与 limit 都下推到 SQL，避免「先按 limit 截断、再在内存按 folder 过滤」造成结果偏少。
+  const conditions = ['LOWER(name) LIKE ?'];
+  const binds: (string | number)[] = [pattern];
+  if (folder) {
+    conditions.push('folder = ?');
+    binds.push(folder);
+  }
+  let query = `SELECT * FROM files WHERE ${conditions.join(' AND ')} ORDER BY uploaded_at DESC`;
+  if (limit) {
+    query += ' LIMIT ?';
+    binds.push(limit);
+  }
 
-  const stmt = env.VAULT_DB.prepare(query);
-  const { results } = limit
-    ? await stmt.bind(pattern, limit).all<FileRow>()
-    : await stmt.bind(pattern).all<FileRow>();
-
+  const { results } = await env.VAULT_DB.prepare(query).bind(...binds).all<FileRow>();
   return (results || []).map(rowToMeta);
 }
 
