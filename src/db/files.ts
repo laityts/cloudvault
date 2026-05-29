@@ -115,11 +115,17 @@ export async function deleteFile(env: Env, id: string): Promise<void> {
 export async function listFilesInFolder(
   env: Env,
   folder: string,
+  limit?: number,
 ): Promise<FileMeta[]> {
-  const { results } = await env.VAULT_DB
-    .prepare('SELECT * FROM files WHERE folder = ? ORDER BY uploaded_at DESC')
-    .bind(folder)
-    .all<FileRow>();
+  const query = limit
+    ? 'SELECT * FROM files WHERE folder = ? ORDER BY uploaded_at DESC LIMIT ?'
+    : 'SELECT * FROM files WHERE folder = ? ORDER BY uploaded_at DESC';
+
+  const stmt = env.VAULT_DB.prepare(query);
+  const { results } = limit
+    ? await stmt.bind(folder, limit).all<FileRow>()
+    : await stmt.bind(folder).all<FileRow>();
+
   return (results || []).map(rowToMeta);
 }
 
@@ -141,16 +147,23 @@ export async function listFilesByFolderPrefix(
 export async function searchFiles(
   env: Env,
   searchTerm: string,
+  limit?: number,
 ): Promise<FileMeta[]> {
   const pattern = '%' + searchTerm.toLowerCase() + '%';
-  const { results } = await env.VAULT_DB
-    .prepare(
-      `SELECT * FROM files
+  const query = limit
+    ? `SELECT * FROM files
        WHERE LOWER(name) LIKE ?
-       ORDER BY uploaded_at DESC`,
-    )
-    .bind(pattern)
-    .all<FileRow>();
+       ORDER BY uploaded_at DESC
+       LIMIT ?`
+    : `SELECT * FROM files
+       WHERE LOWER(name) LIKE ?
+       ORDER BY uploaded_at DESC`;
+
+  const stmt = env.VAULT_DB.prepare(query);
+  const { results } = limit
+    ? await stmt.bind(pattern, limit).all<FileRow>()
+    : await stmt.bind(pattern).all<FileRow>();
+
   return (results || []).map(rowToMeta);
 }
 

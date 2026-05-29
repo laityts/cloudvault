@@ -135,13 +135,15 @@ export async function list(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const folderFilter = url.searchParams.get('folder');
   const searchFilter = url.searchParams.get('search');
+  const limitParam = url.searchParams.get('limit');
+  const limit = limitParam ? parseInt(limitParam, 10) : undefined;
 
   let files;
   if (searchFilter) {
-    files = await searchFiles(env, searchFilter);
+    files = await searchFiles(env, searchFilter, limit);
     if (folderFilter) files = files.filter((f) => f.folder === folderFilter);
   } else {
-    files = await listFilesInFolder(env, folderFilter ?? 'root');
+    files = await listFilesInFolder(env, folderFilter ?? 'root', limit);
   }
 
   return json({ files, cursor: null, totalFiles: files.length });

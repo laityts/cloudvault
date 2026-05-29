@@ -135,21 +135,34 @@ export async function renameFolder(request: Request, env: Env): Promise<Response
 export async function listFolders(_request: Request, env: Env): Promise<Response> {
   const folderSet = new Set<string>();
 
-  const [allFiles, folderRecords, sharedFolders, excludedFolders] = await Promise.all([
-    listAllFiles(env),
+  const [folderRecords, sharedFolders, excludedFolders] = await Promise.all([
     listAllFolders(env),
     getSharedFolders(env),
     getExcludedFolders(env),
   ]);
 
-  for (const file of allFiles) {
-    if (file.folder && file.folder !== 'root') {
-      folderSet.add(file.folder);
-    }
+  // 使用 SQL 聚合查询直接计算文件数统计，避免加载所有文件
+  const fileCountQuery = await env.VAULT_DB
+    .prepare('SELECT folder, COUNT(*) as count FROM files GROUP BY folder')
+    .all<{ folder: string; count: number }>();
+
+  const fileCountMap = new Map<string, number>();
+  for (const row of fileCountQuery.results || []) {
+    fileCountMap.set(row.folder, row.count);
   }
 
   for (const fr of folderRecords) {
     if (fr.path) folderSet.add(fr.path);
+  }
+
+  // 从文件记录中提取文件夹路径（用于发现未在 folders 表中的文件夹）
+  const foldersFromFiles = await env.VAULT_DB
+    .prepare('SELECT DISTINCT folder FROM files WHERE folder != ?')
+    .bind('root')
+    .all<{ folder: string }>();
+
+  for (const row of foldersFromFiles.results || []) {
+    if (row.folder) folderSet.add(row.folder);
   }
 
   for (const folder of [...folderSet]) {
@@ -160,13 +173,6 @@ export async function listFolders(_request: Request, env: Env): Promise<Response
       path = path ? path + '/' + part : part;
       folderSet.add(path);
     }
-  }
-
-  // 统计每个文件夹的直接文件数
-  const fileCountMap = new Map<string, number>();
-  for (const file of allFiles) {
-    const folder = file.folder || 'root';
-    fileCountMap.set(folder, (fileCountMap.get(folder) || 0) + 1);
   }
 
   // 统计每个文件夹的直接子文件夹数
