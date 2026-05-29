@@ -12,6 +12,15 @@ import type {
   UploadPart,
 } from './types';
 
+export class DuplicateContentError extends Error {
+  existing?: { id: string; name: string; folder: string; size: number };
+  constructor(body: { error?: string; existing?: DuplicateContentError['existing'] }) {
+    super(body.error || 'Duplicate content');
+    this.name = 'DuplicateContentError';
+    this.existing = body.existing;
+  }
+}
+
 // ─── Files ───────────────────────────────────────────────────────────────
 
 export interface ListFilesParams {
@@ -52,6 +61,28 @@ export async function zipDownload(ids: string[]): Promise<Blob> {
   });
   if (!res.ok) throw new Error('Failed to download zip');
   return res.blob();
+}
+
+export interface PrecheckResult {
+  sha256: string;
+  exists: boolean;
+  existing?: { id: string; name: string; folder: string; size: number };
+}
+
+export function precheckFiles(sha256s: string[]): Promise<{ results: PrecheckResult[] }> {
+  return apiFetch<{ results: PrecheckResult[] }>('/api/files/precheck', {
+    method: 'POST',
+    body: { sha256s },
+  });
+}
+
+export interface DuplicateGroup {
+  sha256: string;
+  files: FileMeta[];
+}
+
+export function listDuplicates(): Promise<{ groups: DuplicateGroup[] }> {
+  return apiFetch<{ groups: DuplicateGroup[] }>('/api/files/duplicates');
 }
 
 // ─── Folders ─────────────────────────────────────────────────────────────
@@ -234,16 +265,28 @@ export async function multipartComplete(args: {
   uploadId: string;
   key: string;
   parts: UploadPart[];
+  sha256?: string;
   signal?: AbortSignal;
 }) {
   const res = await fetch('/api/files/upload?action=mpu-complete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ uploadId: args.uploadId, key: args.key, parts: args.parts }),
+    body: JSON.stringify({
+      uploadId: args.uploadId,
+      key: args.key,
+      parts: args.parts,
+      ...(args.sha256 ? { sha256: args.sha256 } : {}),
+    }),
     credentials: 'same-origin',
     signal: args.signal,
   });
-  if (!res.ok) throw new Error('Failed to complete multipart upload');
+  if (!res.ok) {
+    if (res.status === 409) {
+      const body = await res.json().catch(() => ({}));
+      throw new DuplicateContentError(body);
+    }
+    throw new Error('Failed to complete multipart upload');
+  }
 }
 
 /** Abort a multipart upload to release any uploaded parts on R2.
