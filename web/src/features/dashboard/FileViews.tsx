@@ -305,8 +305,19 @@ const FolderRow: Component<{
         <div class="md:hidden mt-0.5 text-[11px] text-fg-muted">文件夹</div>
       </div>
     </div>
-    <span class="hidden md:flex">
-      <span class="pill">文件夹</span>
+    <span class="hidden md:flex items-center gap-1.5 text-[11px] text-fg-muted">
+      <Show when={(props.folder.subfolderCount ?? 0) > 0}>
+        <span class="inline-flex items-center gap-0.5">
+          <IconFolder size={11} />
+          {props.folder.subfolderCount}
+        </span>
+      </Show>
+      <Show when={(props.folder.fileCount ?? 0) > 0}>
+        <span class="inline-flex items-center gap-0.5">
+          <IconFile size={11} />
+          {props.folder.fileCount}
+        </span>
+      </Show>
     </span>
     <span class="hidden md:block text-[12px] text-fg-muted">—</span>
     <span class="hidden md:block text-[12px] text-fg-muted">—</span>
