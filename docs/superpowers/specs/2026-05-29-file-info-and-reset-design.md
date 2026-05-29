@@ -185,17 +185,33 @@ async function computeSingleHash(stream: ReadableStream, algorithm: string) {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   
+  // 流式读取所有数据块
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     chunks.push(value);
   }
   
-  const buffer = concatenateChunks(chunks);
+  // 合并所有数据块
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const buffer = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset);
+    offset += chunk.length;
+  }
+  
+  // 计算哈希值
   const hashBuffer = await crypto.subtle.digest(algorithm, buffer);
-  return bufferToHex(hashBuffer);
+  
+  // 转换为十六进制字符串
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 ```
+
+**注意：** 虽然需要将所有数据块收集到内存中才能调用 `crypto.subtle.digest()`，但由于是边读边收集（而不是一次性读取整个文件），仍然比直接 `await object.arrayBuffer()` 更节省内存和 CPU 时间。对于超大文件，如果内存不足，可以考虑分块计算（需要使用支持增量更新的哈希库）。
 
 ### 3. 路由注册
 
