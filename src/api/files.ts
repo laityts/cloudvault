@@ -228,32 +228,47 @@ export async function moveFiles(request: Request, env: Env): Promise<Response> {
   if (body.targetFolder === undefined) return error('Target folder required', 400);
 
   const targetFolder = body.targetFolder;
+  const ids = body.ids;
 
-  const results = await Promise.all(
-    body.ids.map(async (id) => {
-      const meta = await getFile(env, id);
-      if (!meta) return false;
-      if (meta.folder === targetFolder) return false;
+  const moveOne = async (id: string): Promise<boolean> => {
+    const meta = await getFile(env, id);
+    if (!meta) return false;
+    if (meta.folder === targetFolder) return false;
 
-      const newKey = buildR2Key(targetFolder, meta.name);
+    const newKey = buildR2Key(targetFolder, meta.name);
 
-      const oldObject = await env.VAULT_BUCKET.get(meta.key);
-      if (!oldObject) return false;
+    const oldObject = await env.VAULT_BUCKET.get(meta.key);
+    if (!oldObject) return false;
 
-      await env.VAULT_BUCKET.put(newKey, oldObject.body, {
-        httpMetadata: oldObject.httpMetadata,
-        customMetadata: oldObject.customMetadata,
-      });
-      await env.VAULT_BUCKET.delete(meta.key);
+    await env.VAULT_BUCKET.put(newKey, oldObject.body, {
+      httpMetadata: oldObject.httpMetadata,
+      customMetadata: oldObject.customMetadata,
+    });
+    await env.VAULT_BUCKET.delete(meta.key);
 
-      meta.key = newKey;
-      meta.folder = targetFolder;
-      await putFile(env, meta);
-      return true;
-    }),
+    meta.key = newKey;
+    meta.folder = targetFolder;
+    await putFile(env, meta);
+    return true;
+  };
+
+  const CONCURRENCY = 4;
+  let cursor = 0;
+  let moved = 0;
+
+  const worker = async () => {
+    while (cursor < ids.length) {
+      const i = cursor++;
+      const ok = await moveOne(ids[i]!);
+      if (ok) moved++;
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, ids.length) }, () => worker()),
   );
 
-  return json({ moved: results.filter(Boolean).length });
+  return json({ moved });
 }
 
 export async function info(request: Request, env: Env): Promise<Response> {
