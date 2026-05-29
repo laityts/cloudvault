@@ -53,6 +53,7 @@ const router = createRouter([
   { method: 'POST', pattern: '/api/files/move', middleware: [authMiddleware], handler: files.moveFiles },
   { method: 'POST', pattern: '/api/files/zip', middleware: [authMiddleware], handler: media.zipDownload },
   { method: 'POST', pattern: '/api/files/precheck', middleware: [authMiddleware], handler: files.precheck },
+  { method: 'GET', pattern: '/api/files/duplicates', middleware: [authMiddleware], handler: files.listDuplicates },
 
   { method: 'GET', pattern: '/api/files/:id/thumbnail', middleware: [authMiddleware], handler: media.thumbnail },
   { method: 'GET', pattern: '/api/files/:id/preview', middleware: [authMiddleware], handler: media.preview },

@@ -13,6 +13,7 @@ import {
   searchFiles,
   updateFileHashes,
   findFileBySha256,
+  listDuplicatesBySha256,
 } from '../db/files';
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
@@ -398,4 +399,9 @@ export async function precheck(request: Request, env: Env): Promise<Response> {
   );
 
   return json({ results });
+}
+
+export async function listDuplicates(_request: Request, env: Env): Promise<Response> {
+  const groups = await listDuplicatesBySha256(env);
+  return json({ groups });
 }
