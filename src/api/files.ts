@@ -12,6 +12,7 @@ import {
   listFilesInFolder,
   searchFiles,
   updateFileHashes,
+  findFileBySha256,
 } from '../db/files';
 
 export async function upload(request: Request, env: Env): Promise<Response> {
@@ -297,4 +298,41 @@ export async function info(request: Request, env: Env): Promise<Response> {
       500,
     );
   }
+}
+
+const SHA256_RE = /^[0-9a-f]{64}$/;
+const PRECHECK_MAX = 200;
+
+export async function precheck(request: Request, env: Env): Promise<Response> {
+  const body = await parseJson<{ sha256s: string[] }>(request);
+  if (!Array.isArray(body.sha256s)) return error('sha256s array required', 400);
+  if (body.sha256s.length === 0) return json({ results: [] });
+  if (body.sha256s.length > PRECHECK_MAX) return error(`Max ${PRECHECK_MAX} sha256s per request`, 400);
+
+  const normalized: string[] = [];
+  for (const s of body.sha256s) {
+    if (typeof s !== 'string' || !SHA256_RE.test(s.toLowerCase())) {
+      return error('Invalid sha256 in list', 400);
+    }
+    normalized.push(s.toLowerCase());
+  }
+
+  const results = await Promise.all(
+    normalized.map(async (sha256) => {
+      const existing = await findFileBySha256(env, sha256);
+      if (!existing) return { sha256, exists: false as const };
+      return {
+        sha256,
+        exists: true as const,
+        existing: {
+          id: existing.id,
+          name: existing.name,
+          folder: existing.folder,
+          size: existing.size,
+        },
+      };
+    }),
+  );
+
+  return json({ results });
 }
