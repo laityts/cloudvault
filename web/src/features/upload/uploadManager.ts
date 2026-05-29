@@ -1,5 +1,14 @@
-import { multipartCreate, multipartComplete, multipartUploadPart, multipartAbort } from '~/api';
+import {
+  multipartCreate,
+  multipartComplete,
+  multipartUploadPart,
+  multipartAbort,
+  precheckFiles,
+  DuplicateContentError,
+  type PrecheckResult,
+} from '~/api';
 import type { UploadPart } from '~/api/types';
+import { computeFileSha256 } from '~/utils/hash';
 
 export type UploadStatus = 'pending' | 'uploading' | 'paused' | 'done' | 'error' | 'canceled';
 
@@ -23,6 +32,8 @@ export interface UploadItem {
   partsTotal: number;
   /** 已成功上传的分片数（来自 InternalState.completedParts） */
   partsDone: number;
+  /** 内容 SHA-256（hex），由 preflight 计算后透传到上传 header / mpu-complete */
+  sha256?: string;
 }
 
 interface InternalState {
@@ -217,10 +228,39 @@ export class UploadManager {
     return s;
   }
 
-  addFiles(files: Iterable<File>, folder: string): UploadItem[] {
+  /**
+   * 计算一组文件的 SHA-256 并批量调用 /api/files/precheck，把命中既有内容的文件
+   * 区分到 `duplicates`，其余进入 `allowed`。上层 UI 应只把 `allowed` 喂给
+   * `addFiles`（并传第三参数 shaByFile），从而让 server 在创建/完成上传时复用
+   * 既有 R2 对象、避免重复存储。
+   */
+  async preflight(files: File[]): Promise<{
+    allowed: { file: File; sha256: string }[];
+    duplicates: { file: File; existing?: PrecheckResult['existing'] }[];
+  }> {
+    const withSha: { file: File; sha256: string }[] = [];
+    for (const f of files) {
+      const sha256 = await computeFileSha256(f);
+      withSha.push({ file: f, sha256 });
+    }
+    if (withSha.length === 0) return { allowed: [], duplicates: [] };
+    const { results } = await precheckFiles(withSha.map((x) => x.sha256));
+    const byHash = new Map(results.map((r) => [r.sha256, r]));
+    const allowed: { file: File; sha256: string }[] = [];
+    const duplicates: { file: File; existing?: PrecheckResult['existing'] }[] = [];
+    for (const { file, sha256 } of withSha) {
+      const r = byHash.get(sha256);
+      if (r?.exists) duplicates.push({ file, existing: r.existing });
+      else allowed.push({ file, sha256 });
+    }
+    return { allowed, duplicates };
+  }
+
+  addFiles(files: Iterable<File>, folder: string, shaByFile?: Map<File, string>): UploadItem[] {
     const added: UploadItem[] = [];
     for (const file of files) {
       const resumable = file.size >= DIRECT_LIMIT;
+      const sha256 = shaByFile?.get(file);
       const item: UploadItem = {
         id: `u${++_idCounter}-${file.name}`,
         file,
@@ -233,6 +273,7 @@ export class UploadManager {
         needsReselect: false,
         partsTotal: resumable ? Math.ceil(file.size / CHUNK_SIZE) : 1,
         partsDone: 0,
+        ...(sha256 ? { sha256 } : {}),
       };
       this.queue.push(item);
       this.intern(item.id);
@@ -517,6 +558,9 @@ export class UploadManager {
       xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
       xhr.setRequestHeader('X-Folder', encodeURIComponent(item.folder || 'root'));
       xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+      if (item.sha256) {
+        xhr.setRequestHeader('X-File-Sha256', item.sha256);
+      }
       xhr.withCredentials = true;
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
@@ -525,8 +569,19 @@ export class UploadManager {
         }
       };
       xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) resolve();
-        else reject(new Error(xhr.responseText || 'Upload failed'));
+        if (xhr.status === 409) {
+          let existing: DuplicateContentError['existing'] | undefined;
+          try {
+            existing = JSON.parse(xhr.responseText)?.existing;
+          } catch {
+            /* ignore */
+          }
+          reject(new DuplicateContentError({ error: 'Duplicate content', existing }));
+        } else if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+        } else {
+          reject(new Error(xhr.responseText || 'Upload failed'));
+        }
       };
       xhr.onerror = () => reject(new Error('Network error'));
       xhr.onabort = () => reject(new Error('Aborted'));
@@ -545,6 +600,7 @@ export class UploadManager {
           'X-File-Name': encodeURIComponent(file.name),
           'X-Folder': encodeURIComponent(item.folder || 'root'),
           'Content-Type': file.type || 'application/octet-stream',
+          ...(item.sha256 ? { 'X-File-Sha256': item.sha256 } : {}),
         },
         state.abort?.signal,
       );
@@ -610,6 +666,7 @@ export class UploadManager {
       uploadId,
       key,
       parts: state.completedParts,
+      ...(item.sha256 ? { sha256: item.sha256 } : {}),
       signal: state.abort?.signal,
     });
     // 完成后清理临时状态，避免误续传
