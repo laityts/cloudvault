@@ -30,6 +30,7 @@ import {
   IconGrid,
   IconHome,
   IconImage,
+  IconInfo,
   IconLink,
   IconList,
   IconLogout,
@@ -64,6 +65,7 @@ import { FilePreviewDialog } from '~/features/dashboard/FilePreviewDialog';
 import { ShareManagerDrawer } from '~/features/dashboard/ShareManagerDrawer';
 import {
   ConfirmDialog,
+  FileInfoDialog,
   FolderShareLinkDialog,
   MoveDialog,
   NewFolderDialog,
@@ -126,6 +128,7 @@ function DashboardApp() {
   const [shareFile, setShareFile] = createSignal<FileMeta | null>(null);
   const [folderShareLink, setFolderShareLink] = createSignal<string | null>(null);
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [fileInfo, setFileInfo] = createSignal<FileMeta | null>(null);
 
   // Context menus
   const fileMenu = createContextMenu<FileMeta>({ w: 220, h: 280 });
@@ -295,6 +298,7 @@ function DashboardApp() {
       }, disabled: !f.shareToken },
     { label: '移动到…', icon: <IconMove size={14} />, onClick: () => setMoveState({ ids: [f.id] }) },
     { label: '重命名', icon: <IconEdit size={14} />, onClick: () => setRenameTarget({ kind: 'file', id: f.id, name: f.name }) },
+    { label: '信息', icon: <IconInfo size={14} />, onClick: () => setFileInfo(f) },
     { divider: true, label: '' },
     { label: '删除', icon: <IconTrash size={14} />, tone: 'danger', onClick: () => setConfirmState({ kind: 'files', ids: [f.id] }) },
   ];
@@ -812,6 +816,7 @@ function DashboardApp() {
         onChange={() => store.refreshFiles()}
       />
       <FolderShareLinkDialog folder={folderShareLink()} onClose={() => setFolderShareLink(null)} />
+      <FileInfoDialog file={fileInfo()} onClose={() => setFileInfo(null)} />
       <SettingsDialog
         open={settingsOpen()}
         onClose={() => setSettingsOpen(false)}
