@@ -22,8 +22,10 @@ import {
 import {
   createFolderShareLink as apiCreateFolderShareLink,
   createShare,
+  getFileInfo,
   getFolderShareLink,
   getSettings,
+  resetAllData,
   revokeFolderShareLink as apiRevokeFolderShareLink,
   revokeShare,
   saveSettings,
@@ -31,6 +33,7 @@ import {
 import type { FileMeta, SiteSettings } from '~/api/types';
 import { useToast } from '~/ui';
 import { cn } from '~/lib/cn';
+import { formatBytes } from '~/lib/format';
 
 // ─── New Folder ──────────────────────────────────────────────────────────
 
@@ -579,6 +582,7 @@ export const SettingsDialog: Component<{
   const [settings, setSettings] = createSignal<SiteSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
+  const [showResetConfirm, setShowResetConfirm] = createSignal(false);
 
   createEffect(() => {
     if (props.open) {
@@ -688,8 +692,44 @@ export const SettingsDialog: Component<{
               />
             </Show>
           </div>
+
+          <div class="mt-6 pt-4 border-t hairline">
+            <div class="flex items-start gap-3 p-4 rounded-lg border border-danger/30 bg-danger/5">
+              <div class="flex-1 min-w-0">
+                <h3 class="text-[13px] font-semibold text-danger mb-1">危险操作</h3>
+                <p class="text-[12px] text-fg-muted mb-3">
+                  重置后将永久删除所有文件、文件夹与分享链接。站点设置将被保留。此操作不可撤销。
+                </p>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={() => setShowResetConfirm(true)}
+                >
+                  重置所有数据
+                </Button>
+              </div>
+            </div>
+          </div>
         </div>
       </Show>
+      <ConfirmDialog
+        open={showResetConfirm()}
+        onClose={() => setShowResetConfirm(false)}
+        title="确认重置所有数据？"
+        description="此操作将永久删除所有文件、文件夹和分享链接。站点设置将被保留。此操作不可撤销。"
+        variant="danger"
+        confirmLabel="我确定要重置"
+        onConfirm={async () => {
+          try {
+            const result = await resetAllData();
+            toast.success(`已重置，删除了 ${result.deletedFiles} 个文件`);
+            window.location.href = '/';
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : '重置失败');
+            throw e;
+          }
+        }}
+      />
     </Dialog>
   );
 };
@@ -708,3 +748,103 @@ const ToggleRow: Component<{
     <Toggle checked={props.checked} onChange={props.onChange} label={props.title} />
   </div>
 );
+
+// ─── File Info Dialog ────────────────────────────────────────────────────
+
+const InfoRow: Component<{ label: string; value: string }> = (props) => (
+  <div class="flex items-baseline gap-3">
+    <span class="text-fg-muted w-20 shrink-0 text-[12px]">{props.label}</span>
+    <span class="flex-1 break-words">{props.value}</span>
+  </div>
+);
+
+const HashRow: Component<{
+  label: string;
+  value: string | null | undefined;
+  onCopy: () => void;
+}> = (props) => (
+  <div>
+    <div class="flex items-center justify-between gap-2 mb-1">
+      <span class="text-fg-muted text-[12px]">{props.label}</span>
+      <button
+        type="button"
+        class="text-fg-muted hover:text-brand transition-colors disabled:opacity-40"
+        onClick={props.onCopy}
+        disabled={!props.value}
+        title="复制"
+      >
+        <IconCopy size={13} />
+      </button>
+    </div>
+    <code class="block font-mono text-[11px] break-all bg-bg-inset rounded px-2 py-1.5">
+      {props.value ?? '—'}
+    </code>
+  </div>
+);
+
+export const FileInfoDialog: Component<{
+  file: FileMeta | null;
+  onClose: () => void;
+}> = (props) => {
+  const toast = useToast();
+  const [info] = createResource(
+    () => props.file?.id ?? null,
+    async (id) => (id ? getFileInfo(id) : null),
+  );
+
+  const copy = async (label: string, value: string | null | undefined) => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success(`${label} 已复制`);
+    } catch {
+      toast.error('复制失败');
+    }
+  };
+
+  return (
+    <Dialog
+      open={!!props.file}
+      onClose={props.onClose}
+      title="文件信息"
+      maxWidth="560px"
+    >
+      <Show
+        when={!info.loading}
+        fallback={
+          <div class="py-10 flex flex-col items-center gap-3">
+            <Spinner />
+            <span class="text-[12px] text-fg-muted">正在计算文件哈希值…</span>
+          </div>
+        }
+      >
+        <Show when={info()}>
+          {(meta) => (
+            <div class="space-y-3 text-[13px]">
+              <InfoRow label="文件名" value={meta().name} />
+              <InfoRow label="大小" value={formatBytes(meta().size)} />
+              <InfoRow label="类型" value={meta().type || '—'} />
+              <InfoRow
+                label="上传时间"
+                value={new Date(meta().uploadedAt).toLocaleString()}
+              />
+              <InfoRow label="下载次数" value={String(meta().downloads)} />
+              <div class="border-t hairline pt-3 space-y-2">
+                <HashRow
+                  label="SHA-1"
+                  value={meta().sha1}
+                  onCopy={() => copy('SHA-1', meta().sha1)}
+                />
+                <HashRow
+                  label="SHA-256"
+                  value={meta().sha256}
+                  onCopy={() => copy('SHA-256', meta().sha256)}
+                />
+              </div>
+            </div>
+          )}
+        </Show>
+      </Show>
+    </Dialog>
+  );
+};
