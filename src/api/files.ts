@@ -15,6 +15,8 @@ import {
   findFileBySha256,
 } from '../db/files';
 
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
 export async function upload(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const action = url.searchParams.get('action');
@@ -31,6 +33,19 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
   const fileName = decodeURIComponent(request.headers.get('X-File-Name') || 'untitled');
   const folder = decodeURIComponent(request.headers.get('X-Folder') || 'root');
   const contentType = request.headers.get('Content-Type') || getMimeType(fileName);
+  const clientSha256 = request.headers.get('X-File-Sha256')?.toLowerCase() || null;
+
+  if (clientSha256 !== null && !SHA256_RE.test(clientSha256)) {
+    return error('Invalid X-File-Sha256', 400);
+  }
+
+  // 入口检查（在写 R2 之前早退）
+  if (clientSha256) {
+    const existing = await findFileBySha256(env, clientSha256);
+    if (existing) {
+      return json({ error: 'Duplicate content', existing }, 409);
+    }
+  }
 
   const key = buildR2Key(folder, fileName);
   if (isUnsafeKey(key)) return error('Invalid file path', 400);
@@ -45,6 +60,16 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
   });
   if (!r2Object) return error('Upload failed', 500);
 
+  // 写 D1 之前再查一次（竞态兜底：两个并发上传同一份内容）
+  if (clientSha256) {
+    const existing = await findFileBySha256(env, clientSha256);
+    if (existing) {
+      // 回滚 R2
+      try { await env.VAULT_BUCKET.delete(key); } catch { /* ignore */ }
+      return json({ error: 'Duplicate content', existing }, 409);
+    }
+  }
+
   const meta = createFileMeta({
     id,
     key,
@@ -53,6 +78,9 @@ async function handleDirectUpload(request: Request, env: Env): Promise<Response>
     type: contentType,
     folder,
   });
+  if (clientSha256) {
+    meta.sha256 = clientSha256;
+  }
   await putFile(env, meta);
 
   return json(meta, 201);
@@ -62,6 +90,19 @@ async function handleMultipartCreate(request: Request, env: Env): Promise<Respon
   const fileName = decodeURIComponent(request.headers.get('X-File-Name') || 'untitled');
   const folder = decodeURIComponent(request.headers.get('X-Folder') || 'root');
   const contentType = request.headers.get('Content-Type') || getMimeType(fileName);
+  const clientSha256 = request.headers.get('X-File-Sha256')?.toLowerCase() || null;
+
+  if (clientSha256 !== null && !SHA256_RE.test(clientSha256)) {
+    return error('Invalid X-File-Sha256', 400);
+  }
+
+  if (clientSha256) {
+    const existing = await findFileBySha256(env, clientSha256);
+    if (existing) {
+      return json({ error: 'Duplicate content', existing }, 409);
+    }
+  }
+
   const key = buildR2Key(folder, fileName);
 
   const multipart = await env.VAULT_BUCKET.createMultipartUpload(key, {
@@ -92,7 +133,26 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
     uploadId: string;
     key: string;
     parts: { partNumber: number; etag: string }[];
+    sha256?: string;
   }>(request);
+
+  const clientSha256 = body.sha256?.toLowerCase() || null;
+  if (clientSha256 !== null && !SHA256_RE.test(clientSha256)) {
+    return error('Invalid sha256', 400);
+  }
+
+  // 写 D1 之前兜底（mpu-create 后到 mpu-complete 之间可能并发上传同内容）
+  if (clientSha256) {
+    const existing = await findFileBySha256(env, clientSha256);
+    if (existing) {
+      // mpu 已上传 part，需要 abort 以释放
+      try {
+        const mpu = env.VAULT_BUCKET.resumeMultipartUpload(body.key, body.uploadId);
+        await mpu.abort();
+      } catch { /* ignore */ }
+      return json({ error: 'Duplicate content', existing }, 409);
+    }
+  }
 
   const multipart = env.VAULT_BUCKET.resumeMultipartUpload(body.key, body.uploadId);
   const r2Object = await multipart.complete(body.parts);
@@ -106,7 +166,11 @@ async function handleMultipartComplete(request: Request, env: Env): Promise<Resp
     size: r2Object.size,
     type: r2Object.httpMetadata?.contentType || getMimeType(fileName),
     folder,
-  });  await putFile(env, meta);
+  });
+  if (clientSha256) {
+    meta.sha256 = clientSha256;
+  }
+  await putFile(env, meta);
 
   return json(meta, 201);
 }
@@ -300,7 +364,6 @@ export async function info(request: Request, env: Env): Promise<Response> {
   }
 }
 
-const SHA256_RE = /^[0-9a-f]{64}$/;
 const PRECHECK_MAX = 200;
 
 export async function precheck(request: Request, env: Env): Promise<Response> {
