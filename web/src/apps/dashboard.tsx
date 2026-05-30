@@ -207,7 +207,7 @@ function DashboardApp() {
         (grouped[folder] = grouped[folder] || []).push(file);
       }
       for (const [folder, files] of Object.entries(grouped)) {
-        uploadManager.addFiles(files, folder);
+        await handleNewFiles(files, folder);
       }
     };
     document.addEventListener('dragenter', onEnter);
@@ -243,10 +243,37 @@ function DashboardApp() {
 
   let desktopUploadInput: HTMLInputElement | undefined;
 
-  const handleFileInput = (e: Event) => {
+  const handleNewFiles = async (files: File[], folder: string) => {
+    if (files.length === 0) return;
+    let pre: Awaited<ReturnType<typeof uploadManager.preflight>>;
+    try {
+      pre = await uploadManager.preflight(files);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '预检失败');
+      return;
+    }
+    if (pre.duplicates.length > 0) {
+      const lines = pre.duplicates.slice(0, 5).map((d) => {
+        const where = d.existing ? `${d.existing.folder}/${d.existing.name}` : '已存在';
+        return `${d.file.name} → ${where}`;
+      });
+      const more = pre.duplicates.length > 5 ? ` …等共 ${pre.duplicates.length} 个` : '';
+      toast.info(`${pre.duplicates.length} 个文件因内容重复未上传：${lines.join('；')}${more}`);
+    }
+    if (pre.allowed.length > 0) {
+      const shaByFile = new Map(pre.allowed.map((a) => [a.file, a.sha256]));
+      uploadManager.addFiles(
+        pre.allowed.map((a) => a.file),
+        folder,
+        shaByFile,
+      );
+    }
+  };
+
+  const handleFileInput = async (e: Event) => {
     const input = e.currentTarget as HTMLInputElement;
     if (input.files && input.files.length > 0) {
-      uploadManager.addFiles(Array.from(input.files), store.currentFolder());
+      await handleNewFiles(Array.from(input.files), store.currentFolder());
     }
     input.value = '';
   };
