@@ -244,8 +244,14 @@ export class UploadManager {
       withSha.push({ file: f, sha256 });
     }
     if (withSha.length === 0) return { allowed: [], duplicates: [] };
-    const { results } = await precheckFiles(withSha.map((x) => x.sha256));
-    const byHash = new Map(results.map((r) => [r.sha256, r]));
+    const BATCH_SIZE = 200;
+    const allResults: PrecheckResult[] = [];
+    for (let i = 0; i < withSha.length; i += BATCH_SIZE) {
+      const batch = withSha.slice(i, i + BATCH_SIZE);
+      const { results } = await precheckFiles(batch.map((x) => x.sha256));
+      allResults.push(...results);
+    }
+    const byHash = new Map(allResults.map((r) => [r.sha256, r]));
     const allowed: { file: File; sha256: string }[] = [];
     const duplicates: { file: File; existing?: PrecheckResult['existing'] }[] = [];
     for (const { file, sha256 } of withSha) {
