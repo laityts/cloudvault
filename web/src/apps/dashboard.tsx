@@ -76,6 +76,7 @@ import {
 import { UploadManager, readDroppedEntries } from '~/features/upload/uploadManager';
 import { UploadPanel } from '~/features/upload/UploadPanel';
 import type { UploadItem } from '~/features/upload/uploadManager';
+import { DuplicatesDialog } from '~/features/duplicates/DuplicatesDialog';
 import { createIsDesktop } from '~/lib/media';
 import { cn } from '~/lib/cn';
 
@@ -129,6 +130,7 @@ function DashboardApp() {
   const [folderShareLink, setFolderShareLink] = createSignal<string | null>(null);
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [fileInfo, setFileInfo] = createSignal<FileMeta | null>(null);
+  const [duplicatesOpen, setDuplicatesOpen] = createSignal(false);
 
   // Context menus
   const fileMenu = createContextMenu<FileMeta>({ w: 220, h: 280 });
@@ -464,6 +466,13 @@ function DashboardApp() {
             <IconLink size={15} />
           </IconButton>
           <ThemeToggle theme={theme()} onToggle={toggle} size="sm" />
+          <IconButton
+            label="清理重复"
+            onClick={() => setDuplicatesOpen(true)}
+            size="sm"
+          >
+            <IconCopy size={15} />
+          </IconButton>
           <IconButton label="Settings" onClick={() => setSettingsOpen(true)} size="sm">
             <IconSettings size={15} />
           </IconButton>
@@ -862,6 +871,11 @@ function DashboardApp() {
         onSaved={(s) => {
           setBranding({ siteName: s.siteName, siteIconUrl: s.siteIconUrl });
         }}
+      />
+      <DuplicatesDialog
+        open={duplicatesOpen()}
+        onClose={() => setDuplicatesOpen(false)}
+        onDeleted={() => void store.refreshAll()}
       />
 
       {/* Preview / Lightbox */}
