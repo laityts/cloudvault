@@ -196,7 +196,7 @@ const cases = [
   // 大于 8 字节但非 8 倍数（测试尾巴 byte-wise 路径）
   { input: 'hello world', expected: '0d4a1185' },
   // 32 字节（测试纯 slicing-by-8 路径，无尾巴）
-  { input: 'abcdefghijklmnopqrstuvwxyz012345', expected: 'a1b937a8' },
+  { input: 'abcdefghijklmnopqrstuvwxyz012345', expected: '624d474c' },
 ];
 
 let pass = 0, fail = 0;
