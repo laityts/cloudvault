@@ -63,6 +63,8 @@ export interface DashboardStore {
   expandPath: (path: string) => void;
 
   filteredFiles: () => FileMeta[];
+  /** Look up a file in the current folder by id, regardless of active type filter. */
+  fileById: (id: string) => FileMeta | undefined;
   folderTree: () => FolderNode[];
   /** Direct child folders of the current folder (one level deep, sorted by name). */
   currentSubfolders: () => FolderInfo[];
@@ -147,6 +149,13 @@ export function createDashboardStore(): DashboardStore {
     }
     return root;
   });
+
+  const fileIndex = createMemo(() => {
+    const m = new Map<string, FileMeta>();
+    for (const f of files()?.files ?? []) m.set(f.id, f);
+    return m;
+  });
+  const fileById = (id: string) => fileIndex().get(id);
 
   const filteredFiles = createMemo(() => {
     let list = files()?.files?.slice() ?? [];
@@ -357,6 +366,7 @@ export function createDashboardStore(): DashboardStore {
     toggleExpand,
     expandPath,
     filteredFiles,
+    fileById,
     folderTree,
     currentSubfolders,
     refreshAll,
