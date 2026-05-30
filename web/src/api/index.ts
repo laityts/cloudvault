@@ -52,14 +52,9 @@ export function moveFiles(ids: string[], targetFolder: string) {
   return apiFetch<{ moved: number }>('/api/files/move', { method: 'POST', body: { ids, targetFolder } });
 }
 
-export async function zipDownload(ids: string[]): Promise<Blob> {
-  const res = await fetch('/api/files/zip', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    body: JSON.stringify({ ids }),
-  });
-  if (!res.ok) throw new Error('Failed to download zip');
+export async function downloadFileBlob(id: string): Promise<Blob> {
+  const res = await fetch(`/api/files/${id}/download`, { credentials: 'same-origin' });
+  if (!res.ok) throw new Error(`Failed to download file ${id}`);
   return res.blob();
 }
 

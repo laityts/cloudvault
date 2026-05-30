@@ -51,7 +51,6 @@ const router = createRouter([
   { method: 'PUT', pattern: '/api/files/upload', middleware: [authMiddleware], handler: files.upload },
   { method: 'POST', pattern: '/api/files/delete', middleware: [authMiddleware], handler: files.deleteFiles },
   { method: 'POST', pattern: '/api/files/move', middleware: [authMiddleware], handler: files.moveFiles },
-  { method: 'POST', pattern: '/api/files/zip', middleware: [authMiddleware], handler: media.zipDownload },
   { method: 'POST', pattern: '/api/files/precheck', middleware: [authMiddleware], handler: files.precheck },
   { method: 'GET', pattern: '/api/files/duplicates', middleware: [authMiddleware], handler: files.listDuplicates },
 

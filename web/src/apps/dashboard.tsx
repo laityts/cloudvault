@@ -55,7 +55,7 @@ import {
   createContextMenu,
   useToast,
 } from '~/ui';
-import { logout, zipDownload } from '~/api';
+import { logout, downloadFileBlob } from '~/api';
 import type { FileMeta } from '~/api/types';
 import { formatBytes } from '~/lib/format';
 import { createDashboardStore } from '~/features/dashboard/store';
@@ -79,6 +79,7 @@ import type { UploadItem } from '~/features/upload/uploadManager';
 import { DuplicatesDialog } from '~/features/duplicates/DuplicatesDialog';
 import { createIsDesktop } from '~/lib/media';
 import { cn } from '~/lib/cn';
+import { zip } from 'fflate';
 
 bootstrapTheme();
 
@@ -297,8 +298,33 @@ function DashboardApp() {
   const downloadZip = async () => {
     const ids = Array.from(store.selected());
     if (!ids.length) return;
+    const files = store.filteredFiles().filter((f) => ids.includes(f.id));
+    if (!files.length) return;
     try {
-      const blob = await zipDownload(ids);
+      toast.info(`打包中：0 / ${files.length}`);
+      const entries: Record<string, Uint8Array> = {};
+      const usedNames = new Set<string>();
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i]!;
+        const blob = await downloadFileBlob(f.id);
+        let name = f.name;
+        if (usedNames.has(name)) {
+          const dot = name.lastIndexOf('.');
+          const stem = dot > 0 ? name.slice(0, dot) : name;
+          const ext = dot > 0 ? name.slice(dot) : '';
+          let n = 1;
+          while (usedNames.has(`${stem} (${n})${ext}`)) n++;
+          name = `${stem} (${n})${ext}`;
+        }
+        usedNames.add(name);
+        entries[name] = new Uint8Array(await blob.arrayBuffer());
+        toast.info(`打包中：${i + 1} / ${files.length}`);
+      }
+      const zipped: Uint8Array = await new Promise((resolve, reject) => {
+        zip(entries, { level: 0 }, (err, data) => (err ? reject(err) : resolve(data)));
+      });
+      // copy 到独立 ArrayBuffer，避免 SharedArrayBuffer 兼容性问题
+      const blob = new Blob([zipped.slice().buffer], { type: 'application/zip' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -307,7 +333,7 @@ function DashboardApp() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      toast.success('打包下载完成');
+      toast.success(`打包下载完成（${files.length} 个文件）`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '打包失败');
     }
