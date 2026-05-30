@@ -21,7 +21,9 @@ interface ToastItem {
 }
 
 interface ToastContextValue {
-  show: (message: string, opts?: { kind?: ToastKind; duration?: number }) => void;
+  show: (message: string, opts?: { kind?: ToastKind; duration?: number }) => number;
+  update: (id: number, message: string, opts?: { kind?: ToastKind; duration?: number }) => void;
+  dismiss: (id: number) => void;
   success: (message: string, duration?: number) => void;
   error: (message: string, duration?: number) => void;
   info: (message: string, duration?: number) => void;
@@ -66,6 +68,24 @@ export const ToastProvider: Component<{ children: JSX.Element }> = (props) => {
       const handle = window.setTimeout(() => dismiss(id), duration);
       timers.set(id, handle);
     }
+    return id;
+  };
+
+  const update = (id: number, message: string, opts: { kind?: ToastKind; duration?: number } = {}) => {
+    setToasts((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, message, kind: opts.kind ?? t.kind } : t)),
+    );
+    if (opts.duration != null) {
+      const old = timers.get(id);
+      if (old != null) {
+        clearTimeout(old);
+        timers.delete(id);
+      }
+      if (opts.duration > 0) {
+        const handle = window.setTimeout(() => dismiss(id), opts.duration);
+        timers.set(id, handle);
+      }
+    }
   };
 
   onCleanup(() => {
@@ -75,6 +95,8 @@ export const ToastProvider: Component<{ children: JSX.Element }> = (props) => {
 
   const ctx: ToastContextValue = {
     show,
+    update,
+    dismiss,
     success: (m, d) => show(m, { kind: 'success', duration: d }),
     error: (m, d) => show(m, { kind: 'error', duration: d }),
     info: (m, d) => show(m, { kind: 'info', duration: d }),
