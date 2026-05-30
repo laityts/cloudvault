@@ -83,6 +83,10 @@ import { zip } from 'fflate';
 
 bootstrapTheme();
 
+const ZIP_MAX_FILES = 100;
+const ZIP_MAX_BYTES = 1024 * 1024 * 1024; // 1GB：客户端全量内存打包，超出有 OOM 风险
+const ZIP_CONCURRENCY = 4;
+
 const TYPE_FILTERS: Array<{ v: ReturnType<typeof createDashboardStore>['typeFilter'] extends () => infer T ? T : never; label: string; icon: any }> = [
   { v: 'all' as any, label: '全部类型', icon: IconFile },
   { v: 'images' as any, label: '图片', icon: IconImage },
@@ -298,16 +302,50 @@ function DashboardApp() {
   const downloadZip = async () => {
     const ids = Array.from(store.selected());
     if (!ids.length) return;
-    const files = store.filteredFiles().filter((f) => ids.includes(f.id));
+    // 按全部选区取文件（不受当前 typeFilter 影响），避免静默丢弃被筛掉的选中项
+    const files = ids.map((id) => store.fileById(id)).filter((f): f is FileMeta => !!f);
     if (!files.length) return;
+    if (files.length > ZIP_MAX_FILES) {
+      toast.error(`最多打包 ${ZIP_MAX_FILES} 个文件`);
+      return;
+    }
+    const totalBytes = files.reduce((s, f) => s + f.size, 0);
+    if (totalBytes > ZIP_MAX_BYTES) {
+      toast.error('打包总大小超过 1GB 限制，请减少选择');
+      return;
+    }
+
+    const progressId = toast.show(`打包中：0 / ${files.length}`, { duration: 0 });
     try {
-      toast.info(`打包中：0 / ${files.length}`);
+      // 有限并发下载，单个文件失败不影响整批（记为 null，稍后跳过）
+      const buffers = new Array<Uint8Array | null>(files.length);
+      let done = 0;
+      const worker = async (start: number) => {
+        for (let i = start; i < files.length; i += ZIP_CONCURRENCY) {
+          try {
+            const blob = await downloadFileBlob(files[i]!.id);
+            buffers[i] = new Uint8Array(await blob.arrayBuffer());
+          } catch {
+            buffers[i] = null;
+          }
+          done++;
+          toast.update(progressId, `打包中：${done} / ${files.length}`);
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(ZIP_CONCURRENCY, files.length) }, (_, k) => worker(k)),
+      );
+
       const entries: Record<string, Uint8Array> = {};
       const usedNames = new Set<string>();
+      const failed: string[] = [];
       for (let i = 0; i < files.length; i++) {
-        const f = files[i]!;
-        const blob = await downloadFileBlob(f.id);
-        let name = f.name;
+        const buf = buffers[i];
+        if (!buf) {
+          failed.push(files[i]!.name);
+          continue;
+        }
+        let name = files[i]!.name;
         if (usedNames.has(name)) {
           const dot = name.lastIndexOf('.');
           const stem = dot > 0 ? name.slice(0, dot) : name;
@@ -317,9 +355,16 @@ function DashboardApp() {
           name = `${stem} (${n})${ext}`;
         }
         usedNames.add(name);
-        entries[name] = new Uint8Array(await blob.arrayBuffer());
-        toast.info(`打包中：${i + 1} / ${files.length}`);
+        entries[name] = buf;
       }
+
+      const okCount = Object.keys(entries).length;
+      if (!okCount) {
+        toast.dismiss(progressId);
+        toast.error('打包失败：所有文件下载失败');
+        return;
+      }
+
       const zipped: Uint8Array = await new Promise((resolve, reject) => {
         zip(entries, { level: 0 }, (err, data) => (err ? reject(err) : resolve(data)));
       });
@@ -333,8 +378,20 @@ function DashboardApp() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      toast.success(`打包下载完成（${files.length} 个文件）`);
+
+      if (failed.length) {
+        toast.update(progressId, `打包完成（${okCount} 个），${failed.length} 个文件下载失败`, {
+          kind: 'warning',
+          duration: 4200,
+        });
+      } else {
+        toast.update(progressId, `打包下载完成（${okCount} 个文件）`, {
+          kind: 'success',
+          duration: 3200,
+        });
+      }
     } catch (e) {
+      toast.dismiss(progressId);
       toast.error(e instanceof Error ? e.message : '打包失败');
     }
   };
