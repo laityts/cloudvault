@@ -14,6 +14,7 @@ import {
   updateFileHashes,
   findFileBySha256,
   listDuplicatesBySha256,
+  findFilesBySha256Batch,
 } from '../db/files';
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
@@ -381,22 +382,23 @@ export async function precheck(request: Request, env: Env): Promise<Response> {
     normalized.push(s.toLowerCase());
   }
 
-  const results = await Promise.all(
-    normalized.map(async (sha256) => {
-      const existing = await findFileBySha256(env, sha256);
-      if (!existing) return { sha256, exists: false as const };
-      return {
-        sha256,
-        exists: true as const,
-        existing: {
-          id: existing.id,
-          name: existing.name,
-          folder: existing.folder,
-          size: existing.size,
-        },
-      };
-    }),
-  );
+  // 单条 SQL IN 查询，规避 Promise.all 子请求风暴
+  const byHash = await findFilesBySha256Batch(env, normalized);
+
+  const results = normalized.map((sha256) => {
+    const existing = byHash.get(sha256);
+    if (!existing) return { sha256, exists: false as const };
+    return {
+      sha256,
+      exists: true as const,
+      existing: {
+        id: existing.id,
+        name: existing.name,
+        folder: existing.folder,
+        size: existing.size,
+      },
+    };
+  });
 
   return json({ results });
 }

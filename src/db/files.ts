@@ -229,3 +229,23 @@ export async function listDuplicatesBySha256(env: Env): Promise<Array<{ sha256: 
   }
   return Array.from(groups, ([sha256, files]) => ({ sha256, files }));
 }
+
+/** 批量按 SHA-256 查找文件，返回 { sha256 → FileMeta } 映射（仅命中的 sha 出现）。 */
+export async function findFilesBySha256Batch(
+  env: Env,
+  sha256s: string[],
+): Promise<Map<string, FileMeta>> {
+  if (sha256s.length === 0) return new Map();
+  const placeholders = sha256s.map(() => '?').join(',');
+  const { results } = await env.VAULT_DB
+    .prepare(`SELECT * FROM files WHERE sha256 IN (${placeholders})`)
+    .bind(...sha256s)
+    .all<FileRow>();
+  const m = new Map<string, FileMeta>();
+  for (const row of results ?? []) {
+    const meta = rowToMeta(row);
+    if (!meta.sha256) continue;
+    if (!m.has(meta.sha256)) m.set(meta.sha256, meta); // 一个 sha 可能对应多条记录，取第一条
+  }
+  return m;
+}
