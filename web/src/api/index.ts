@@ -242,7 +242,13 @@ export async function multipartCreate(
     credentials: 'same-origin',
     signal,
   });
-  if (!res.ok) throw new Error('Failed to create multipart upload');
+  if (!res.ok) {
+    if (res.status === 409) {
+      const body = await res.json().catch(() => ({}));
+      throw new DuplicateContentError(body);
+    }
+    throw new Error('Failed to create multipart upload');
+  }
   return res.json();
 }
 

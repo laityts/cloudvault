@@ -238,26 +238,37 @@ export class UploadManager {
     allowed: { file: File; sha256: string }[];
     duplicates: { file: File; existing?: PrecheckResult['existing'] }[];
   }> {
+    const PREFLIGHT_SIZE_LIMIT = 200 * 1024 * 1024; // 200MB
     const withSha: { file: File; sha256: string }[] = [];
+    const skipped: File[] = [];
     for (const f of files) {
+      if (f.size > PREFLIGHT_SIZE_LIMIT) {
+        skipped.push(f);
+        continue;
+      }
       const sha256 = await computeFileSha256(f);
       withSha.push({ file: f, sha256 });
     }
-    if (withSha.length === 0) return { allowed: [], duplicates: [] };
-    const BATCH_SIZE = 200;
-    const allResults: PrecheckResult[] = [];
-    for (let i = 0; i < withSha.length; i += BATCH_SIZE) {
-      const batch = withSha.slice(i, i + BATCH_SIZE);
-      const { results } = await precheckFiles(batch.map((x) => x.sha256));
-      allResults.push(...results);
-    }
-    const byHash = new Map(allResults.map((r) => [r.sha256, r]));
     const allowed: { file: File; sha256: string }[] = [];
     const duplicates: { file: File; existing?: PrecheckResult['existing'] }[] = [];
-    for (const { file, sha256 } of withSha) {
-      const r = byHash.get(sha256);
-      if (r?.exists) duplicates.push({ file, existing: r.existing });
-      else allowed.push({ file, sha256 });
+    if (withSha.length > 0) {
+      const BATCH_SIZE = 200;
+      const allResults: PrecheckResult[] = [];
+      for (let i = 0; i < withSha.length; i += BATCH_SIZE) {
+        const batch = withSha.slice(i, i + BATCH_SIZE);
+        const { results } = await precheckFiles(batch.map((x) => x.sha256));
+        allResults.push(...results);
+      }
+      const byHash = new Map(allResults.map((r) => [r.sha256, r]));
+      for (const { file, sha256 } of withSha) {
+        const r = byHash.get(sha256);
+        if (r?.exists) duplicates.push({ file, existing: r.existing });
+        else allowed.push({ file, sha256 });
+      }
+    }
+    // 大文件未参与预检，直接放行（服务端会按需算 sha 补回 D1）
+    for (const f of skipped) {
+      allowed.push({ file: f, sha256: '' });
     }
     return { allowed, duplicates };
   }
@@ -549,6 +560,12 @@ export class UploadManager {
       if (state.paused) {
         // 状态已在 pauseInternal 内置为 paused
         return;
+      }
+      if (err instanceof DuplicateContentError) {
+        // server 端命中重复时已 abort mpu；清理 state 避免 retry 复用 stale uploadId
+        state.uploadId = undefined;
+        state.key = undefined;
+        state.completedParts = [];
       }
       item.status = 'error';
       item.error = err instanceof Error ? err.message : String(err);

@@ -99,7 +99,18 @@ export const DuplicatesDialog: Component<DuplicatesDialogProps> = (props) => {
         </div>
       </Show>
 
-      <Show when={!data.loading && data() && data()!.length === 0}>
+      <Show when={!data.loading && data.error}>
+        <div class="text-fg-muted py-6 text-center text-sm">
+          加载失败：{(data.error as Error)?.message || '未知错误'}
+          <div class="mt-2">
+            <button class="text-brand hover:underline" onClick={() => refetch()}>
+              重试
+            </button>
+          </div>
+        </div>
+      </Show>
+
+      <Show when={!data.loading && !data.error && data() && data()!.length === 0}>
         <div class="py-8 text-center text-sm text-fg-muted">仓库中没有重复内容。</div>
       </Show>
 
