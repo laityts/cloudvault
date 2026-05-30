@@ -88,10 +88,15 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
             if (done) break;
             crc = crc32Update(crc, value);
             size += value.length;
-            await writer.write(value);
+            // 必须拷贝：value 指向 R2 reader 内部 buffer，可能在下次 read() 时被复用。
+            // 直接传给 writer 会让已 enqueue 但下游未消费的 chunk 被新数据覆盖。
+            await writer.write(new Uint8Array(value));
           }
         } finally {
           try { reader.releaseLock(); } catch { /* ignore */ }
+        }
+        if (size > 0xFFFFFFFF) {
+          throw new Error(`File too large for zip32: ${meta.name} (${size} bytes)`);
         }
         const finalCrc = crc32Final(crc);
 
@@ -100,12 +105,18 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
 
         centralDir.push(buildCentralDirEntry(fileName, finalCrc, size, offset));
         offset += localHeader.length + size + descriptor.length;
+        if (offset > 0xFFFFFFFF) {
+          throw new Error(`Zip would exceed 4GB limit at file: ${meta.name}`);
+        }
       }
 
       let cdSize = 0;
       for (const cd of centralDir) {
         await writer.write(cd);
         cdSize += cd.length;
+      }
+      if (cdSize > 0xFFFFFFFF || offset > 0xFFFFFFFF) {
+        throw new Error('Zip exceeds 4GB limit (central directory)');
       }
       await writer.write(buildEOCD(centralDir.length, cdSize, offset));
     } catch (err) {
