@@ -41,7 +41,7 @@ export async function preview(request: Request, env: Env): Promise<Response> {
   });
 }
 
-export async function zipDownload(request: Request, env: Env): Promise<Response> {
+export async function zipDownload(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const body = await parseJson<{ ids: string[] }>(request);
   if (!body.ids?.length) return error('No file IDs provided', 400);
   if (body.ids.length > 100) return error('Max 100 files per zip', 400);
@@ -65,8 +65,8 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();
 
-  // Stream zip body asynchronously; do not await before returning Response.
-  (async () => {
+  // ctx.waitUntil 持有背景任务，否则 Worker 在返回 Response 后会被回收，stream 中途断掉。
+  ctx.waitUntil((async () => {
     try {
       let offset = 0;
       const centralDir: Uint8Array[] = [];
@@ -124,7 +124,7 @@ export async function zipDownload(request: Request, env: Env): Promise<Response>
       return;
     }
     await writer.close();
-  })();
+  })());
 
   const zipName = 'cloudvault-' + new Date().toISOString().slice(0, 10) + '.zip';
   return new Response(readable, {
