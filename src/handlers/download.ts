@@ -43,7 +43,7 @@ export async function handleCleanDownload(request: Request, env: Env): Promise<R
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
-  headers.set('Cache-Control', 'public, max-age=14400, s-maxage=86400');
+  headers.set('Cache-Control', 'private, max-age=300');
   headers.set('Content-Length', String(object.size));
   if (!headers.has('Content-Type')) {
     headers.set('Content-Type', getMimeType(meta.name));

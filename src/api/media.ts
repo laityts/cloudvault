@@ -13,12 +13,10 @@ export async function thumbnail(request: Request, env: Env): Promise<Response> {
   if (!meta) return error('File not found', 404);
   if (!meta.type.startsWith('image/')) return error('Not an image', 400);
 
-  const object = await env.VAULT_BUCKET.get(meta.key);
-  if (!object) return error('File not found in storage', 404);
-
-  return streamR2Object(object, request, {
+  const res = await streamR2Object(env.VAULT_BUCKET, meta.key, request, {
     cacheControl: 'public, max-age=14400, s-maxage=86400',
   });
+  return res ?? error('File not found in storage', 404);
 }
 
 export async function preview(request: Request, env: Env): Promise<Response> {
@@ -28,10 +26,7 @@ export async function preview(request: Request, env: Env): Promise<Response> {
   const meta = await getFile(env, id);
   if (!meta) return error('File not found', 404);
 
-  const object = await env.VAULT_BUCKET.get(meta.key);
-  if (!object) return error('File not found in storage', 404);
-
-  return streamR2Object(object, request, {
+  const res = await streamR2Object(env.VAULT_BUCKET, meta.key, request, {
     cacheControl: 'private, max-age=3600',
     acceptRanges: true,
     headers: {
@@ -39,5 +34,6 @@ export async function preview(request: Request, env: Env): Promise<Response> {
       'Content-Disposition': `inline; filename="${encodeURIComponent(meta.name)}"`,
     },
   });
+  return res ?? error('File not found in storage', 404);
 }
 

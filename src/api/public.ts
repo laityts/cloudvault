@@ -245,18 +245,21 @@ export async function publicDownload(request: Request, env: Env): Promise<Respon
     return error('File not publicly accessible', 403);
   }
 
-  const object = await env.VAULT_BUCKET.get(meta.key);
-  if (!object) return error('File not found in storage', 404);
-
-  meta.downloads++;
-  await putFile(env, meta);
-
-  return streamR2Object(object, request, {
-    cacheControl: 'public, max-age=14400, s-maxage=86400',
+  // 公开下载的可见性取决于可变的分享状态，且 caches.default 是按数据中心隔离的、
+  // 无法跨 colo 全局失效，因此不做共享边缘缓存，只允许浏览器短时私有缓存，
+  // 保证撤销分享 / 取消文件夹分享后即时生效。
+  const res = await streamR2Object(env.VAULT_BUCKET, meta.key, request, {
+    cacheControl: 'private, max-age=300',
     headers: {
       'Content-Disposition': 'attachment; filename="' + encodeURIComponent(meta.name) + '"',
     },
   });
+  if (!res) return error('File not found in storage', 404);
+
+  meta.downloads++;
+  await putFile(env, meta);
+
+  return res;
 }
 
 // ─── Share Page (token-based, single file or folder) ─────────────────
@@ -325,19 +328,19 @@ export async function handleShareDownload(request: Request, env: Env): Promise<R
     return error('Password required', 403);
   }
 
-  const object = await env.VAULT_BUCKET.get(result.meta.key);
-  if (!object) return error('File not found in storage', 404);
-
-  result.meta.downloads++;
-  await putFile(env, result.meta);
-
-  return streamR2Object(object, request, {
+  const res = await streamR2Object(env.VAULT_BUCKET, result.meta.key, request, {
     cacheControl: 'public, max-age=14400, s-maxage=86400',
     acceptRanges: true,
     headers: {
       'Content-Disposition': 'attachment; filename="' + result.meta.name + '"',
     },
   });
+  if (!res) return error('File not found in storage', 404);
+
+  result.meta.downloads++;
+  await putFile(env, result.meta);
+
+  return res;
 }
 
 export async function handlePreview(request: Request, env: Env): Promise<Response> {
@@ -352,10 +355,7 @@ export async function handlePreview(request: Request, env: Env): Promise<Respons
     return error('Password required', 403);
   }
 
-  const object = await env.VAULT_BUCKET.get(result.meta.key);
-  if (!object) return error('File not found', 404);
-
-  return streamR2Object(object, request, {
+  const res = await streamR2Object(env.VAULT_BUCKET, result.meta.key, request, {
     cacheControl: 'public, max-age=14400, s-maxage=86400',
     acceptRanges: true,
     headers: {
@@ -363,6 +363,7 @@ export async function handlePreview(request: Request, env: Env): Promise<Respons
       'Content-Disposition': 'inline',
     },
   });
+  return res ?? error('File not found', 404);
 }
 
 // ─── Folder Share Download / Preview (token + fileId in query) ───────
@@ -400,18 +401,18 @@ export async function handleFolderShareDownload(request: Request, env: Env): Pro
   if (resolved instanceof Response) return resolved;
   const meta = resolved.meta;
 
-  const object = await env.VAULT_BUCKET.get(meta.key);
-  if (!object) return error('File not found in storage', 404);
-
-  meta.downloads++;
-  await putFile(env, meta);
-
-  return streamR2Object(object, request, {
+  const res = await streamR2Object(env.VAULT_BUCKET, meta.key, request, {
     cacheControl: 'public, max-age=14400, s-maxage=86400',
     headers: {
       'Content-Disposition': 'attachment; filename="' + encodeURIComponent(meta.name) + '"',
     },
   });
+  if (!res) return error('File not found in storage', 404);
+
+  meta.downloads++;
+  await putFile(env, meta);
+
+  return res;
 }
 
 export async function handleFolderSharePreview(request: Request, env: Env): Promise<Response> {
@@ -419,16 +420,14 @@ export async function handleFolderSharePreview(request: Request, env: Env): Prom
   if (resolved instanceof Response) return resolved;
   const meta = resolved.meta;
 
-  const object = await env.VAULT_BUCKET.get(meta.key);
-  if (!object) return error('File not found in storage', 404);
-
-  return streamR2Object(object, request, {
+  const res = await streamR2Object(env.VAULT_BUCKET, meta.key, request, {
     cacheControl: 'public, max-age=14400, s-maxage=86400',
     headers: {
       'Content-Type': meta.type || 'application/octet-stream',
       'Content-Disposition': 'inline',
     },
   });
+  return res ?? error('File not found in storage', 404);
 }
 
 // ─── Share Password Verify ────────────────────────────────────────────

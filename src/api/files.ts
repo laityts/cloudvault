@@ -233,15 +233,13 @@ export async function download(request: Request, env: Env): Promise<Response> {
   const meta = await getFile(env, id);
   if (!meta) return error('File not found', 404);
 
-  const object = await env.VAULT_BUCKET.get(meta.key);
-  if (!object) return error('File not found in storage', 404);
-
-  return streamR2Object(object, request, {
+  const res = await streamR2Object(env.VAULT_BUCKET, meta.key, request, {
     cacheControl: 'private, max-age=14400',
     headers: {
       'Content-Disposition': 'attachment; filename="' + meta.name + '"',
     },
   });
+  return res ?? error('File not found in storage', 404);
 }
 
 export async function deleteFiles(request: Request, env: Env): Promise<Response> {

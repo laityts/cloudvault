@@ -13,7 +13,7 @@ import * as admin from './api/admin';
 import * as download from './handlers/download';
 import { handleRootPage, handleLoginPage, handleAdminPage, serve404Page } from './handlers/pages';
 import { handleWebDav } from './handlers/webdav';
-import { serveWithEdgeCache, isStaticAsset } from './utils/cache';
+import { isStaticAsset } from './utils/cache';
 
 const router = createRouter([
   // ── Auth ──────────────────────────────────────────────────────────
@@ -27,12 +27,7 @@ const router = createRouter([
   // ── Public API (no auth) ──────────────────────────────────────────
   { method: 'GET', pattern: '/api/public/shared', handler: pub.listPublicShared },
   { method: 'GET', pattern: '/api/public/folder', handler: pub.browsePublicFolder },
-  {
-    method: 'GET',
-    pattern: '/api/public/download/*',
-    handler: async (req, env, ctx) =>
-      (await serveWithEdgeCache(req, ctx, () => pub.publicDownload(req, env)))!,
-  },
+  { method: 'GET', pattern: '/api/public/download/*', handler: pub.publicDownload },
 
   // ── Share routes (token-based, no session) ────────────────────────
   { method: 'GET', pattern: '/s/:token', handler: pub.handleSharePage },
@@ -115,9 +110,7 @@ export default {
       }
 
       if (method === 'GET' || method === 'HEAD') {
-        const cleanResponse = await serveWithEdgeCache(request, ctx, () =>
-          download.handleCleanDownload(request, env),
-        );
+        const cleanResponse = await download.handleCleanDownload(request, env);
         if (cleanResponse) return cleanResponse;
       }
 
