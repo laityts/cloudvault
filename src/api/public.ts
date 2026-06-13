@@ -329,7 +329,7 @@ export async function handleShareDownload(request: Request, env: Env): Promise<R
   }
 
   const res = await streamR2Object(env.VAULT_BUCKET, result.meta.key, request, {
-    cacheControl: 'public, max-age=14400, s-maxage=86400',
+    cacheControl: 'private, max-age=300',
     acceptRanges: true,
     headers: {
       'Content-Disposition': 'attachment; filename="' + result.meta.name + '"',
@@ -356,7 +356,7 @@ export async function handlePreview(request: Request, env: Env): Promise<Respons
   }
 
   const res = await streamR2Object(env.VAULT_BUCKET, result.meta.key, request, {
-    cacheControl: 'public, max-age=14400, s-maxage=86400',
+    cacheControl: 'private, max-age=300',
     acceptRanges: true,
     headers: {
       'Content-Type': result.meta.type || 'application/octet-stream',
@@ -402,7 +402,7 @@ export async function handleFolderShareDownload(request: Request, env: Env): Pro
   const meta = resolved.meta;
 
   const res = await streamR2Object(env.VAULT_BUCKET, meta.key, request, {
-    cacheControl: 'public, max-age=14400, s-maxage=86400',
+    cacheControl: 'private, max-age=300',
     headers: {
       'Content-Disposition': 'attachment; filename="' + encodeURIComponent(meta.name) + '"',
     },
@@ -421,7 +421,7 @@ export async function handleFolderSharePreview(request: Request, env: Env): Prom
   const meta = resolved.meta;
 
   const res = await streamR2Object(env.VAULT_BUCKET, meta.key, request, {
-    cacheControl: 'public, max-age=14400, s-maxage=86400',
+    cacheControl: 'private, max-age=300',
     headers: {
       'Content-Type': meta.type || 'application/octet-stream',
       'Content-Disposition': 'inline',

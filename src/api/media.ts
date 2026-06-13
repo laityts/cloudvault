@@ -14,7 +14,8 @@ export async function thumbnail(request: Request, env: Env): Promise<Response> {
   if (!meta.type.startsWith('image/')) return error('Not an image', 400);
 
   const res = await streamR2Object(env.VAULT_BUCKET, meta.key, request, {
-    cacheControl: 'public, max-age=14400, s-maxage=86400',
+    // session 认证内容不应进共享缓存;仅允许浏览器私有缓存
+    cacheControl: 'private, max-age=14400',
   });
   return res ?? error('File not found in storage', 404);
 }
