@@ -422,6 +422,7 @@ export async function handleFolderSharePreview(request: Request, env: Env): Prom
 
   const res = await streamR2Object(env.VAULT_BUCKET, meta.key, request, {
     cacheControl: 'private, max-age=300',
+    acceptRanges: true,
     headers: {
       'Content-Type': meta.type || 'application/octet-stream',
       'Content-Disposition': 'inline',
